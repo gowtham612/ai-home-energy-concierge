@@ -1,0 +1,355 @@
+<!DOCTYPE html>
+<!--
+  Phone companion — open on the Galaxy S25 at http://<pc-ip>:8000/phone
+
+  Demo-safety notes:
+  - The manual HOME/AWAY toggle ALWAYS works. Geolocation is a bonus that
+    degrades silently, because it is commonly blocked over plain HTTP.
+  - No CDN, no framework, no build step — venue Wi-Fi may block outbound.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
+<meta name="theme-color" content="#1a1a19">
+<title>Energy Concierge</title>
+<style>
+  :root {
+    --surface: #1a1a19; --page: #0d0d0d;
+    --primary: #ffffff; --secondary: #c3c2b7; --muted: #898781;
+    --border: rgba(255,255,255,0.10);
+    --blue: #3987e5; --good: #0ca30c; --warning: #fab219;
+    --serious: #ec835a; --critical: #d03b3b;
+    --sans: system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  body {
+    margin: 0; background: var(--page); color: var(--primary);
+    font-family: var(--sans); font-size: 16px; line-height: 1.5;
+    padding-bottom: 30px;
+  }
+  header {
+    padding: 16px; border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: 10px;
+  }
+  header h1 { margin: 0; font-size: 17px; font-weight: 600; flex: 1; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); }
+  .dot.ok { background: var(--good); } .dot.bad { background: var(--critical); }
+  .connlbl { font-size: 11px; color: var(--muted); }
+
+  .wrap { padding: 16px; }
+
+  /* presence toggle — big touch targets, readable across a room */
+  .toggle { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 14px; }
+  .toggle button {
+    font-family: var(--sans); font-size: 17px; font-weight: 600;
+    padding: 22px 0; border-radius: 12px; cursor: pointer;
+    background: var(--surface); color: var(--secondary);
+    border: 1px solid var(--border);
+  }
+  .toggle button.active { border-color: var(--blue); color: var(--blue); background: rgba(57,135,229,0.10); }
+  .toggle .sub { display: block; font-size: 11px; font-weight: 400; color: var(--muted); margin-top: 3px; }
+
+  .row { display: flex; gap: 8px; margin-bottom: 14px; }
+  .row button {
+    flex: 1; font-family: var(--sans); font-size: 13px; padding: 12px 8px;
+    border-radius: 9px; background: var(--surface); color: var(--secondary);
+    border: 1px solid var(--border); cursor: pointer; min-height: 44px;
+  }
+
+  .status {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 10px; padding: 13px 14px; margin-bottom: 16px; font-size: 13px;
+  }
+  .status .k { color: var(--muted); }
+  .status .line { display: flex; justify-content: space-between; padding: 3px 0; }
+  .status .v { color: var(--primary); font-variant-numeric: tabular-nums; }
+
+  .banner {
+    display: none; background: rgba(208,59,59,0.14); border: 1px solid var(--critical);
+    border-radius: 9px; padding: 11px 13px; margin-bottom: 12px; font-size: 13px;
+  }
+
+  h2 { font-size: 13px; color: var(--muted); font-weight: 500; margin: 0 0 10px; }
+
+  .card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 11px; margin-bottom: 11px; overflow: hidden;
+  }
+  .card .strip { height: 4px; }
+  .card .in { padding: 13px 14px; }
+  .sev {
+    font-size: 11px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: .05em; color: var(--secondary); margin-bottom: 6px;
+    display: flex; align-items: center; gap: 5px;
+  }
+  .card h3 { margin: 0 0 6px; font-size: 16px; font-weight: 600; }
+  .card p { margin: 0 0 12px; font-size: 14px; color: var(--secondary); }
+  .money { font-size: 30px; font-weight: 600; letter-spacing: -0.02em; margin-bottom: 2px; }
+  .moneysub { font-size: 11px; color: var(--muted); margin-bottom: 11px; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .chip {
+    font-size: 12px; padding: 7px 11px; border-radius: 18px;
+    border: 1px solid var(--border); color: var(--secondary);
+  }
+  /* Approve = the physical-action control. Big, because it is the demo moment. */
+  .approve {
+    width: 100%; margin-top: 12px; font-family: var(--sans);
+    font-size: 15px; font-weight: 600; padding: 15px 0; border-radius: 11px;
+    border: 1px solid var(--blue); color: var(--blue);
+    background: rgba(57,135,229,0.12); cursor: pointer; min-height: 50px;
+  }
+  .approve:disabled { opacity: 0.55; }
+  .approve.done { border-color: var(--good); color: var(--good); background: rgba(12,163,12,0.12); }
+  .refused {
+    margin-top: 10px; font-size: 12px; color: var(--warning);
+    border-left: 2px solid var(--warning); padding: 6px 0 6px 9px;
+  }
+  .realized {
+    background: rgba(12,163,12,0.10); border: 1px solid var(--good);
+    border-radius: 10px; padding: 11px 13px; margin-bottom: 14px;
+    font-size: 13px; display: none;
+  }
+  .realized b { font-size: 19px; }
+  .empty { color: var(--muted); font-size: 14px; text-align: center; padding: 34px 10px; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Energy Concierge</h1>
+  <span class="dot" id="dot"></span><span class="connlbl" id="connlbl">connecting</span>
+</header>
+
+<div class="wrap">
+  <div class="banner" id="banner"></div>
+
+  <div class="toggle">
+    <button id="b-home">I'm Home<span class="sub">hub relaxes rules</span></button>
+    <button id="b-away">I'm Away<span class="sub">hub watches for waste</span></button>
+  </div>
+
+  <div class="row">
+    <button id="b-geo">Use my location</button>
+    <button id="b-sethome">Set home here</button>
+    <button id="b-notify">Enable alerts</button>
+  </div>
+
+  <div class="status">
+    <div class="line"><span class="k">Current draw</span><span class="v" id="s-watts">—</span></div>
+    <div class="line"><span class="k">Tariff</span><span class="v" id="s-rate">—</span></div>
+    <div class="line"><span class="k">Room</span><span class="v" id="s-room">—</span></div>
+    <div class="line"><span class="k">Distance from home</span><span class="v" id="s-dist">—</span></div>
+    <div class="line"><span class="k">Hub</span><span class="v" id="s-hub">—</span></div>
+  </div>
+
+  <h2>Recommendations</h2>
+  <div class="realized" id="realized"></div>
+  <div id="list"><div class="empty">Nothing to report yet.</div></div>
+</div>
+
+<script>
+const SEV = {
+  critical: { c: "var(--critical)", i: "!!", l: "Critical" },
+  serious:  { c: "var(--serious)",  i: "!",  l: "Serious"  },
+  warning:  { c: "var(--warning)",  i: "~",  l: "Warning"  },
+  good:     { c: "var(--good)",     i: "✓",  l: "Saved"    }
+};
+
+let homeCoords = JSON.parse(localStorage.getItem("homeCoords") || "null");
+let geoWatch = null, lastSeen = new Set(), presence = null;
+
+/* -------- websocket -------- */
+function connect() {
+  const ws = new WebSocket(`ws://${location.host}/ws`);
+  ws.onopen  = () => setConn(true);
+  ws.onclose = () => { setConn(false); setTimeout(connect, 2000); };
+  ws.onmessage = (e) => {
+    const m = JSON.parse(e.data);
+    if (m.type === "state") paint(m.data);
+    if (m.type === "reco")  notify(m.data);
+  };
+  setInterval(() => { try { ws.send("p"); } catch (_) {} }, 15000);
+}
+function setConn(ok) {
+  document.getElementById("dot").className = "dot " + (ok ? "ok" : "bad");
+  document.getElementById("connlbl").textContent = ok ? "connected" : "offline";
+  document.getElementById("s-hub").textContent = location.host;
+}
+
+function paint(s) {
+  document.getElementById("s-watts").textContent = Math.round(s.total_watts ?? 0) + " W";
+  document.getElementById("s-rate").textContent =
+    `$${(s.tariff?.rate ?? 0).toFixed(2)}/kWh ${s.tariff?.period === "on_peak" ? "(peak)" : ""}`;
+  const rk = Object.keys(s.rooms ?? {})[0], r = s.rooms?.[rk];
+  document.getElementById("s-room").textContent = r
+    ? `${r.occupancy ? "occupied" : "empty"} · ${(r.temp_c ?? 0).toFixed(1)}°C · ${r.lux ?? 0} lux` : "—";
+  document.getElementById("s-dist").textContent = (s.user?.distance_m ?? 0) + " m";
+
+  if (presence === null && s.user?.presence) mark(s.user.presence);
+
+  const recos = s.recos ?? [];
+  const applied = new Set(s.applied_ids ?? []);
+
+  // Realized savings banner — "you could save" becomes "you saved".
+  const rz = s.realized ?? { usd: 0, kwh: 0, count: 0 };
+  const rzEl = document.getElementById("realized");
+  if (rz.count) {
+    rzEl.innerHTML = `✓ You saved <b>$${(rz.usd ?? 0).toFixed(2)}</b> — ` +
+      `${rz.count} action${rz.count > 1 ? "s" : ""} applied, ` +
+      `${(rz.kwh ?? 0).toFixed(2)} kWh avoided`;
+    rzEl.style.display = "block";
+  } else {
+    rzEl.style.display = "none";
+  }
+
+  const el = document.getElementById("list");
+  if (!recos.length) { el.innerHTML = `<div class="empty">Nothing to report yet.</div>`; return; }
+
+  el.innerHTML = recos.map(r => {
+    const v = SEV[r.severity] ?? SEV.warning;
+    const isApplied = applied.has(r.id);
+    const control = isApplied
+      ? `<button class="approve done" disabled>✓ Applied — saving realized</button>`
+      : `<button class="approve" data-reco="${esc(r.id)}">Approve &amp; turn it off</button>`;
+    return `<div class="card">
+      <div class="strip" style="background:${v.c}"></div>
+      <div class="in">
+        <div class="sev"><span style="color:${v.c}">${v.i}</span>${v.l}</div>
+        <h3>${esc(r.title)}</h3>
+        <p>${esc(r.body)}</p>
+        <div class="money">$${(r.usd ?? 0).toFixed(2)}</div>
+        <div class="moneysub">${(r.kwh ?? 0).toFixed(2)} kWh · ${(r.co2_kg ?? 0).toFixed(2)} kg CO₂ · rule ${esc(r.rule_name)}</div>
+        <div class="chips">${(r.actions ?? []).map(a => `<span class="chip">${esc(a)}</span>`).join("")}</div>
+        ${control}
+        <div class="refused" id="rf-${esc(r.id)}" style="display:none"></div>
+      </div></div>`;
+  }).join("");
+
+  el.querySelectorAll(".approve[data-reco]").forEach(btn => {
+    btn.onclick = () => approve(btn.dataset.reco, btn);
+  });
+
+  recos.filter(r => r.severity === "critical" && !lastSeen.has(r.id))
+       .forEach(r => { lastSeen.add(r.id); notify(r); });
+}
+
+/* Approve -> hub commands the UNO Q -> the servo physically flips the switch. */
+async function approve(recoId, btn) {
+  const old = btn.innerHTML;
+  btn.disabled = true;
+  btn.textContent = "Actuating…";
+  const note = document.getElementById("rf-" + recoId);
+  if (note) note.style.display = "none";
+
+  try {
+    const r = await fetch("/api/apply", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ reco_id: recoId, action: "off", approved_by: "phone" })
+    });
+    const j = await r.json();
+    if (r.status === 409) {
+      // Comfort guardrail refused the physical action. Intended behaviour.
+      if (note) {
+        note.textContent = "⚠ " + (j.reason ?? "Refused by the comfort guardrail.");
+        note.style.display = "block";
+      }
+      btn.disabled = false;
+      btn.innerHTML = old;
+      return;
+    }
+    if (!j.ok) throw new Error(j.error ?? "failed");
+    btn.className = "approve done";
+    btn.textContent = "✓ Applied — saving realized";
+    if (navigator.vibrate) navigator.vibrate(80);
+  } catch (err) {
+    btn.disabled = false;
+    btn.innerHTML = old;
+    if (note) { note.textContent = "⚠ " + err; note.style.display = "block"; }
+  }
+}
+
+function notify(r) {
+  if (!r || r.severity !== "critical") return;
+  const text = `${r.title} — $${(r.usd ?? 0).toFixed(2)}`;
+  if ("Notification" in window && Notification.permission === "granted") {
+    try {
+      new Notification("Energy Concierge", { body: text });
+      if (navigator.vibrate) navigator.vibrate([200, 100, 200]);
+      return;
+    } catch (_) {}
+  }
+  const b = document.getElementById("banner");   // visible fallback
+  b.textContent = "⚡ " + text;
+  b.style.display = "block";
+  if (navigator.vibrate) navigator.vibrate([200, 100, 200]);
+  setTimeout(() => { b.style.display = "none"; }, 9000);
+}
+
+/* -------- presence -------- */
+async function setPresence(p, dist) {
+  presence = p;
+  mark(p);
+  try {
+    await fetch("/api/presence", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ presence: p, distance_m: Math.round(dist ?? (p === "away" ? 2400 : 0)) })
+    });
+  } catch (e) { console.warn(e); }
+}
+function mark(p) {
+  document.getElementById("b-home").classList.toggle("active", p === "home");
+  document.getElementById("b-away").classList.toggle("active", p === "away");
+}
+document.getElementById("b-home").onclick = () => setPresence("home", 0);
+document.getElementById("b-away").onclick = () => setPresence("away", 2400);
+
+/* -------- geolocation (optional, degrades silently) -------- */
+function dist(a, b) {
+  const R = 6371000, dLat = (b.lat - a.lat) * Math.PI / 180,
+        dLon = (b.lon - a.lon) * Math.PI / 180,
+        la = a.lat * Math.PI / 180, lb = b.lat * Math.PI / 180;
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(la) * Math.cos(lb) * Math.sin(dLon / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(h));
+}
+document.getElementById("b-sethome").onclick = () => {
+  if (!navigator.geolocation) return alert("Geolocation unavailable — use the manual toggle.");
+  navigator.geolocation.getCurrentPosition(
+    p => {
+      homeCoords = { lat: p.coords.latitude, lon: p.coords.longitude };
+      localStorage.setItem("homeCoords", JSON.stringify(homeCoords));
+      alert("Home location saved.");
+    },
+    e => alert("Could not get location (" + e.message + "). The manual toggle still works."));
+};
+document.getElementById("b-geo").onclick = (ev) => {
+  if (!navigator.geolocation) return alert("Geolocation unavailable — use the manual toggle.");
+  if (!homeCoords) return alert('Tap "Set home here" first, while you are at home.');
+  if (geoWatch !== null) {
+    navigator.geolocation.clearWatch(geoWatch); geoWatch = null;
+    ev.target.textContent = "Use my location"; return;
+  }
+  ev.target.textContent = "Tracking…";
+  geoWatch = navigator.geolocation.watchPosition(p => {
+    const d = dist(homeCoords, { lat: p.coords.latitude, lon: p.coords.longitude });
+    setPresence(d > 100 ? "away" : "home", d);
+  }, e => {
+    alert("Location failed (" + e.message + "). Falling back to the manual toggle.");
+    ev.target.textContent = "Use my location"; geoWatch = null;
+  }, { enableHighAccuracy: true, maximumAge: 5000, timeout: 10000 });
+};
+
+document.getElementById("b-notify").onclick = async (ev) => {
+  if (!("Notification" in window)) return alert("Notifications unsupported; in-page alerts will be used.");
+  const r = await Notification.requestPermission();
+  ev.target.textContent = r === "granted" ? "Alerts on" : "Alerts blocked";
+};
+
+function esc(s) {
+  return String(s ?? "").replace(/[&<>"]/g, c =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+}
+connect();
+</script>
+</body>
+</html>

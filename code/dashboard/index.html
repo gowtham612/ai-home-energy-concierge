@@ -1,0 +1,646 @@
+<!DOCTYPE html>
+<!--
+  AI Home Energy Concierge — hub dashboard.
+
+  Design notes (dataviz method):
+  - Dark mode is selected, not flipped: series/status steps are chosen for the
+    dark surface #1a1a19 and validated against it.
+  - Series colors used in fixed slot order (blue, orange, aqua). Never cycled,
+    never a 4th.
+  - Single y-axis on the power chart. No dual axes anywhere.
+  - Status colors always paired with an icon + text label, never color alone.
+  - Every dollar figure is expandable to the formula string that produced it,
+    so a judge can audit any number on screen. This is the point of the project.
+-->
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AI Home Energy Concierge</title>
+<style>
+  .viz-root, :root {
+    color-scheme: dark;
+    --surface-1:      #1a1a19;
+    --page:           #0d0d0d;
+    --text-primary:   #ffffff;
+    --text-secondary: #c3c2b7;
+    --text-muted:     #898781;
+    --gridline:       #2c2c2a;
+    --baseline:       #383835;
+    --border:         rgba(255,255,255,0.10);
+
+    --series-1:       #3987e5;   /* total power        */
+    --series-2:       #d95926;   /* hvac               */
+    --series-3:       #199e70;   /* lighting           */
+
+    --good:           #0ca30c;
+    --warning:        #fab219;
+    --serious:        #ec835a;
+    --critical:       #d03b3b;
+
+    --sans: system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--page); color: var(--text-primary);
+    font-family: var(--sans); font-size: 14px; line-height: 1.5;
+  }
+
+  header {
+    display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap;
+    padding: 20px 24px 16px; border-bottom: 1px solid var(--border);
+  }
+  header h1 { margin: 0; font-size: 18px; font-weight: 600; letter-spacing: -0.01em; }
+  header .sub { color: var(--text-muted); font-size: 13px; }
+  .spacer { flex: 1 1 auto; }
+
+  /* status dots — always with a text label beside them */
+  .conn { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-secondary); }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-muted); flex: none; }
+  .dot.ok  { background: var(--good); }
+  .dot.bad { background: var(--critical); }
+
+  main { padding: 20px 24px 40px; max-width: 1500px; }
+
+  /* one filter/control row above everything it scopes */
+  .controls {
+    display: flex; gap: 8px; flex-wrap: wrap; align-items: center;
+    padding: 12px 0 20px;
+  }
+  button {
+    font-family: var(--sans); font-size: 13px; color: var(--text-primary);
+    background: var(--surface-1); border: 1px solid var(--border);
+    border-radius: 6px; padding: 7px 13px; cursor: pointer; min-height: 34px;
+  }
+  button:hover { border-color: rgba(255,255,255,0.24); }
+  button.active { border-color: var(--series-1); color: var(--series-1); }
+  .ctl-label { color: var(--text-muted); font-size: 12px; margin-right: 2px; }
+
+  /* ---------- KPI row of stat tiles ---------- */
+  .kpis {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+    gap: 12px; margin-bottom: 12px;
+  }
+  .tile {
+    background: var(--surface-1); border: 1px solid var(--border);
+    border-radius: 10px; padding: 14px 16px 12px;
+  }
+  .tile .label { color: var(--text-secondary); font-size: 12px; margin-bottom: 6px; }
+  .tile .value { font-size: 27px; font-weight: 600; letter-spacing: -0.02em; }
+  .tile .unit  { font-size: 14px; font-weight: 400; color: var(--text-secondary); margin-left: 3px; }
+  .tile .delta { font-size: 12px; color: var(--text-secondary); margin-top: 3px; }
+
+  /* hero figure — exactly one per view */
+  .tile.hero .value { font-size: 48px; line-height: 1.05; }
+
+  .grid2 { display: grid; grid-template-columns: 1.55fr 1fr; gap: 12px; align-items: start; }
+  @media (max-width: 1080px) { .grid2 { grid-template-columns: 1fr; } }
+
+  .card {
+    background: var(--surface-1); border: 1px solid var(--border);
+    border-radius: 10px; padding: 16px;
+  }
+  .card h2 {
+    margin: 0 0 2px; font-size: 14px; font-weight: 600;
+  }
+  .card .cardsub { color: var(--text-muted); font-size: 12px; margin-bottom: 14px; }
+
+  /* legend — always present for >=2 series */
+  .legend { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 10px; }
+  .legend span { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-secondary); }
+  .key { width: 14px; height: 2px; border-radius: 1px; flex: none; }
+
+  svg { display: block; width: 100%; overflow: visible; }
+  .tick { fill: var(--text-muted); font-size: 10px; font-variant-numeric: tabular-nums; }
+  .endlabel { fill: var(--text-secondary); font-size: 11px; font-weight: 600; }
+
+  /* ---------- recommendation cards ---------- */
+  .recos { display: flex; flex-direction: column; gap: 10px; max-height: 620px; overflow-y: auto; }
+  .reco {
+    border: 1px solid var(--border); border-radius: 8px;
+    background: rgba(255,255,255,0.02); overflow: hidden;
+  }
+  .reco .strip { height: 3px; }
+  .reco .inner { padding: 12px 14px; }
+  .reco .sev {
+    display: inline-flex; align-items: center; gap: 5px;
+    font-size: 11px; font-weight: 600; text-transform: uppercase;
+    letter-spacing: 0.04em; margin-bottom: 6px; color: var(--text-secondary);
+  }
+  .reco .icon { font-size: 12px; font-weight: 700; }
+  .reco h3 { margin: 0 0 5px; font-size: 14px; font-weight: 600; }
+  .reco p  { margin: 0 0 10px; color: var(--text-secondary); font-size: 13px; }
+  .reco .figs { display: flex; gap: 14px; flex-wrap: wrap; margin-bottom: 10px; }
+  .reco .fig { font-size: 12px; color: var(--text-secondary); }
+  .reco .fig b { color: var(--text-primary); font-size: 15px; font-weight: 600; }
+  .chips { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+  .chip {
+    font-size: 11px; padding: 4px 9px; border-radius: 20px;
+    border: 1px solid var(--border); color: var(--text-secondary);
+  }
+  /* Apply = the control that closes the loop into physical action */
+  .apply {
+    font-size: 11px; font-weight: 600; padding: 5px 12px; border-radius: 20px;
+    border: 1px solid var(--series-1); color: var(--series-1);
+    background: rgba(57,135,229,0.10); cursor: pointer; min-height: 26px;
+  }
+  .apply:hover { background: rgba(57,135,229,0.18); }
+  .apply:disabled { opacity: 0.55; cursor: default; }
+  .applied {
+    font-size: 11px; font-weight: 600; color: var(--good);
+    display: inline-flex; align-items: center; gap: 4px;
+  }
+  .refused {
+    margin-top: 8px; font-size: 11px; color: var(--warning);
+    border-left: 2px solid var(--warning); padding: 4px 0 4px 8px;
+  }
+  .audit {
+    margin-top: 10px; border-top: 1px solid var(--border); padding-top: 8px;
+  }
+  .audit summary {
+    cursor: pointer; font-size: 11px; color: var(--text-muted);
+    list-style: none; display: flex; align-items: center; gap: 5px;
+  }
+  .audit summary::-webkit-details-marker { display: none; }
+  .audit summary::before { content: "▸"; font-size: 9px; }
+  .audit[open] summary::before { content: "▾"; }
+  .audit .body { padding: 8px 0 2px; font-size: 11px; color: var(--text-secondary); }
+  .audit code {
+    display: block; background: rgba(0,0,0,0.35); border-radius: 4px;
+    padding: 7px 9px; margin: 6px 0; font-size: 10.5px; line-height: 1.6;
+    color: var(--text-secondary); word-break: break-word;
+  }
+  .audit ul { margin: 6px 0 0; padding-left: 16px; }
+  .audit li { margin-bottom: 3px; }
+  .badge {
+    font-size: 10px; padding: 2px 6px; border-radius: 4px;
+    border: 1px solid var(--border); color: var(--text-muted); margin-left: 6px;
+  }
+
+  /* ---------- table view (the WCAG-clean twin) ---------- */
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--gridline); }
+  th { color: var(--text-muted); font-weight: 500; font-size: 11px; }
+  td { color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+  td.name { color: var(--text-primary); font-variant-numeric: normal; }
+  .hidden { display: none; }
+
+  .empty { color: var(--text-muted); font-size: 13px; padding: 22px 4px; }
+
+  /* tooltip */
+  #tip {
+    position: fixed; pointer-events: none; opacity: 0; transition: opacity .1s;
+    background: #000; border: 1px solid var(--border); border-radius: 6px;
+    padding: 7px 10px; font-size: 11.5px; z-index: 50; max-width: 240px;
+  }
+  #tip .tt-t { color: var(--text-muted); margin-bottom: 3px; }
+  #tip .tt-v { color: var(--text-primary); font-weight: 600; font-variant-numeric: tabular-nums; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>AI Home Energy Concierge</h1>
+  <span class="sub" id="clock">—</span>
+  <span class="sub" id="tariff">—</span>
+  <div class="spacer"></div>
+  <div class="conn"><span class="dot" id="dot-mqtt"></span><span id="lbl-mqtt">broker</span></div>
+  <div class="conn"><span class="dot" id="dot-ws"></span><span id="lbl-ws">hub</span></div>
+</header>
+
+<main>
+  <!-- one control row, above everything it scopes -->
+  <div class="controls">
+    <span class="ctl-label">Presence</span>
+    <button id="btn-home">Home</button>
+    <button id="btn-away">Away</button>
+    <span class="ctl-label" style="margin-left:12px">View</span>
+    <button id="btn-chart" class="active">Chart</button>
+    <button id="btn-table">Table</button>
+    <div class="spacer"></div>
+    <button id="btn-deep">Generate weekly deep report →</button>
+  </div>
+
+  <section class="kpis">
+    <div class="tile hero">
+      <div class="label">Current draw</div>
+      <div class="value" id="kpi-watts">0<span class="unit">W</span></div>
+      <div class="delta" id="kpi-watts-sub">—</div>
+    </div>
+    <div class="tile">
+      <div class="label">Avoidable today</div>
+      <div class="value" id="kpi-usd">$0.00</div>
+      <div class="delta" id="kpi-usd-sub">across all open findings</div>
+    </div>
+    <div class="tile">
+      <div class="label">Realized by acting</div>
+      <div class="value" id="kpi-realized" style="color:var(--good)">$0.00</div>
+      <div class="delta" id="kpi-realized-sub">nothing applied yet</div>
+    </div>
+    <div class="tile">
+      <div class="label">Energy wasted</div>
+      <div class="value" id="kpi-kwh">0.00<span class="unit">kWh</span></div>
+      <div class="delta" id="kpi-co2-sub">— kg CO₂</div>
+    </div>
+    <div class="tile">
+      <div class="label">Room occupancy</div>
+      <div class="value" id="kpi-occ" style="font-size:20px">—</div>
+      <div class="delta" id="kpi-occ-sub">—</div>
+    </div>
+    <div class="tile">
+      <div class="label">Open findings</div>
+      <div class="value" id="kpi-findings">0</div>
+      <div class="delta" id="kpi-findings-sub">—</div>
+    </div>
+  </section>
+
+  <div class="grid2">
+    <div>
+      <div class="card">
+        <h2>Household power draw</h2>
+        <div class="cardsub">Last 5 minutes · watts · one axis</div>
+
+        <!-- legend always present for >=2 series -->
+        <div class="legend">
+          <span><i class="key" style="background:var(--series-1)"></i>Total</span>
+          <span><i class="key" style="background:var(--series-2)"></i>HVAC</span>
+          <span><i class="key" style="background:var(--series-3)"></i>Lighting</span>
+        </div>
+
+        <div id="chart-wrap"><svg id="chart" height="230" role="img"
+             aria-label="Household power draw over the last five minutes"></svg></div>
+
+        <div id="table-wrap" class="hidden" style="margin-top:4px">
+          <table>
+            <thead><tr><th>Time</th><th>Total (W)</th><th>HVAC (W)</th><th>Lighting (W)</th></tr></thead>
+            <tbody id="tbody-power"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="card" style="margin-top:12px">
+        <h2>Live device state</h2>
+        <div class="cardsub">Sensor and load readings feeding the rules engine</div>
+        <table>
+          <thead><tr><th>Device</th><th>State</th><th>Draw</th><th>Detail</th></tr></thead>
+          <tbody id="tbody-state"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Recommendations</h2>
+      <div class="cardsub">Numbers computed in Python · wording by the local model · expand any card to audit</div>
+      <div class="recos" id="recos">
+        <div class="empty">Waiting for the first finding…</div>
+      </div>
+    </div>
+  </div>
+</main>
+
+<div id="tip"></div>
+
+<script>
+const SEV = {
+  critical: { color: "var(--critical)", icon: "!!", label: "Critical" },
+  serious:  { color: "var(--serious)",  icon: "!",  label: "Serious"  },
+  warning:  { color: "var(--warning)",  icon: "~",  label: "Warning"  },
+  good:     { color: "var(--good)",     icon: "✓",  label: "Good"     }
+};
+
+let STATE = null, view = "chart";
+const tip = document.getElementById("tip");
+
+/* ---------------- WebSocket ---------------- */
+function connect() {
+  const ws = new WebSocket(`ws://${location.host}/ws`);
+  ws.onopen = () => setDot("ws", true, "hub connected");
+  ws.onclose = () => { setDot("ws", false, "hub offline"); setTimeout(connect, 2000); };
+  ws.onmessage = (e) => {
+    const msg = JSON.parse(e.data);
+    if (msg.type === "state") { STATE = msg.data; render(); }
+    if (msg.type === "reco")  { /* state push carries recos too */ }
+  };
+  setInterval(() => { try { ws.send("ping"); } catch (_) {} }, 15000);
+}
+
+function setDot(which, ok, label) {
+  const d = document.getElementById("dot-" + which);
+  d.className = "dot " + (ok ? "ok" : "bad");
+  document.getElementById("lbl-" + which).textContent = label;
+}
+
+/* ---------------- render ---------------- */
+function render() {
+  if (!STATE) return;
+  const s = STATE;
+
+  setDot("mqtt", s.mqtt_connected, s.mqtt_connected ? "broker connected" : "broker offline");
+  document.getElementById("clock").textContent = "Simulated clock " + (s.tariff?.clock ?? "—");
+  document.getElementById("tariff").textContent =
+    `· ${s.tariff?.period === "on_peak" ? "On-peak" : "Off-peak"} $${(s.tariff?.rate ?? 0).toFixed(2)}/kWh`;
+
+  // KPIs
+  const w = s.total_watts ?? 0;
+  document.getElementById("kpi-watts").innerHTML = `${Math.round(w)}<span class="unit">W</span>`;
+  document.getElementById("kpi-watts-sub").textContent =
+    `≈ $${(w / 1000 * (s.tariff?.rate ?? 0)).toFixed(2)} per hour at the current rate`;
+
+  const recos = s.recos ?? [];
+  const applied = new Set(s.applied_ids ?? []);
+  const open = recos.filter(r => !applied.has(r.id));
+  const usd = open.reduce((a, r) => a + (r.usd || 0), 0);
+  const kwh = open.reduce((a, r) => a + (r.kwh || 0), 0);
+  const co2 = open.reduce((a, r) => a + (r.co2_kg || 0), 0);
+  document.getElementById("kpi-usd").textContent = "$" + usd.toFixed(2);
+  document.getElementById("kpi-kwh").innerHTML = `${kwh.toFixed(2)}<span class="unit">kWh</span>`;
+  document.getElementById("kpi-co2-sub").textContent = `${co2.toFixed(2)} kg CO₂ avoidable`;
+
+  const rz = s.realized ?? { usd: 0, kwh: 0, count: 0 };
+  document.getElementById("kpi-realized").textContent = "$" + (rz.usd ?? 0).toFixed(2);
+  document.getElementById("kpi-realized-sub").textContent = rz.count
+    ? `${rz.count} action${rz.count > 1 ? "s" : ""} applied · ${(rz.kwh ?? 0).toFixed(2)} kWh saved`
+    : "nothing applied yet";
+
+  const room = Object.values(s.rooms ?? {})[0];
+  const roomName = Object.keys(s.rooms ?? {})[0] ?? "—";
+  if (room) {
+    document.getElementById("kpi-occ").textContent = room.occupancy ? "Occupied" : "Empty";
+    document.getElementById("kpi-occ-sub").textContent =
+      `${roomName} · ${(room.temp_c ?? 0).toFixed(1)}°C · ${room.lux ?? 0} lux · user ${s.user?.presence ?? "?"}`;
+  }
+  document.getElementById("kpi-findings").textContent = open.length;
+  document.getElementById("kpi-findings-sub").textContent =
+    open.length ? `top: ${open[0].rule_name.replace(/_/g, " ")}` : "nothing wasteful detected";
+
+  drawChart();
+  drawPowerTable();
+  drawStateTable();
+  drawRecos(recos);
+}
+
+/* --- series split for the chart --- */
+function seriesFrom(hist, loads) {
+  // HVAC and lighting share of the current mix, applied across history.
+  // Honest simplification: we log total watts, and split by the present mix.
+  const hv = Object.entries(loads ?? {})
+    .filter(([k, v]) => /ac|heater/.test(k) && v.state === "on")
+    .reduce((a, [, v]) => a + (v.watts || 0), 0);
+  const li = Object.entries(loads ?? {})
+    .filter(([k, v]) => /lights/.test(k) && v.state === "on")
+    .reduce((a, [, v]) => a + (v.watts || 0), 0);
+  const tot = hist.length ? hist[hist.length - 1].watts : 0;
+  const rHv = tot > 0 ? hv / tot : 0, rLi = tot > 0 ? li / tot : 0;
+  return hist.map(p => ({ ts: p.ts, total: p.watts,
+                          hvac: p.watts * rHv, light: p.watts * rLi }));
+}
+
+function drawChart() {
+  const svg = document.getElementById("chart");
+  const hist = (STATE.power_history ?? []).slice(-60);
+  const W = svg.clientWidth || 700, H = 230;
+  const M = { t: 12, r: 46, b: 26, l: 44 };   // r/b leave room for end-labels + axis band
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+
+  if (hist.length < 2) {
+    svg.innerHTML = `<text x="${W/2}" y="${H/2}" text-anchor="middle" class="tick">collecting samples…</text>`;
+    return;
+  }
+
+  const data = seriesFrom(hist, STATE.loads);
+  const maxV = Math.max(100, ...data.map(d => d.total)) * 1.15;
+  const x = i => M.l + (i / (data.length - 1)) * (W - M.l - M.r);
+  const y = v => H - M.b - (v / maxV) * (H - M.t - M.b);
+
+  const ticks = [0, maxV / 2, maxV].map(v => Math.round(v / 100) * 100);
+  let g = "";
+
+  // recessive solid hairline grid — never dashed
+  ticks.forEach(v => {
+    g += `<line x1="${M.l}" y1="${y(v)}" x2="${W - M.r}" y2="${y(v)}"
+           stroke="var(--gridline)" stroke-width="1"/>`;
+    g += `<text x="${M.l - 8}" y="${y(v) + 3}" text-anchor="end" class="tick">${v.toLocaleString()}</text>`;
+  });
+  g += `<line x1="${M.l}" y1="${H - M.b}" x2="${W - M.r}" y2="${H - M.b}"
+         stroke="var(--baseline)" stroke-width="1"/>`;
+
+  // x axis: first / middle / last only, so labels never collide
+  [0, Math.floor(data.length / 2), data.length - 1].forEach(i => {
+    const t = new Date(data[i].ts * 1000);
+    g += `<text x="${x(i)}" y="${H - M.b + 15}" text-anchor="middle" class="tick">
+            ${String(t.getHours()).padStart(2,"0")}:${String(t.getMinutes()).padStart(2,"0")}:${String(t.getSeconds()).padStart(2,"0")}</text>`;
+  });
+
+  const line = (key, color) => {
+    const d = data.map((p, i) => `${i ? "L" : "M"}${x(i).toFixed(1)},${y(p[key]).toFixed(1)}`).join("");
+    return `<path d="${d}" fill="none" stroke="${color}" stroke-width="2"
+             stroke-linejoin="round" stroke-linecap="round"/>`;
+  };
+
+  // area wash on the primary series only (~10% opacity, never a saturated block)
+  const areaD = data.map((p, i) => `${i ? "L" : "M"}${x(i).toFixed(1)},${y(p.total).toFixed(1)}`).join("")
+    + `L${x(data.length - 1).toFixed(1)},${y(0)}L${x(0).toFixed(1)},${y(0)}Z`;
+  g += `<path d="${areaD}" fill="var(--series-1)" opacity="0.10"/>`;
+
+  g += line("total", "var(--series-1)");
+  g += line("hvac",  "var(--series-2)");
+  g += line("light", "var(--series-3)");
+
+  // end markers: >=8px with a 2px surface ring; label the total only (selective)
+  const last = data[data.length - 1], lx = x(data.length - 1);
+  [["total","--series-1"],["hvac","--series-2"],["light","--series-3"]].forEach(([k, c]) => {
+    g += `<circle cx="${lx}" cy="${y(last[k])}" r="4" fill="var(${c})"
+            stroke="var(--surface-1)" stroke-width="2"/>`;
+  });
+  g += `<text x="${lx + 9}" y="${y(last.total) + 4}" class="endlabel">${Math.round(last.total)} W</text>`;
+
+  // crosshair + tooltip hit layer
+  g += `<rect id="hit" x="${M.l}" y="${M.t}" width="${W - M.l - M.r}" height="${H - M.t - M.b}"
+         fill="transparent" style="cursor:crosshair"/>`;
+  g += `<line id="cross" x1="0" y1="${M.t}" x2="0" y2="${H - M.b}"
+         stroke="var(--text-muted)" stroke-width="1" opacity="0"/>`;
+
+  svg.innerHTML = g;
+
+  const hit = svg.querySelector("#hit"), cross = svg.querySelector("#cross");
+  hit.addEventListener("mousemove", (ev) => {
+    const r = svg.getBoundingClientRect();
+    const px = (ev.clientX - r.left) * (W / r.width);
+    let i = Math.round(((px - M.l) / (W - M.l - M.r)) * (data.length - 1));
+    i = Math.max(0, Math.min(data.length - 1, i));
+    const p = data[i];
+    cross.setAttribute("x1", x(i)); cross.setAttribute("x2", x(i));
+    cross.setAttribute("opacity", "0.5");
+    const t = new Date(p.ts * 1000).toLocaleTimeString();
+    tip.innerHTML = `<div class="tt-t">${t}</div>
+      <div class="tt-v">Total ${Math.round(p.total)} W</div>
+      <div class="tt-v">HVAC ${Math.round(p.hvac)} W</div>
+      <div class="tt-v">Lighting ${Math.round(p.light)} W</div>`;
+    tip.style.left = (ev.clientX + 14) + "px";
+    tip.style.top = (ev.clientY - 10) + "px";
+    tip.style.opacity = "1";
+  });
+  hit.addEventListener("mouseleave", () => {
+    tip.style.opacity = "0"; cross.setAttribute("opacity", "0");
+  });
+}
+
+function drawPowerTable() {
+  const hist = (STATE.power_history ?? []).slice(-60);
+  const data = seriesFrom(hist, STATE.loads).slice().reverse();
+  document.getElementById("tbody-power").innerHTML = data.map(p => `
+    <tr><td>${new Date(p.ts * 1000).toLocaleTimeString()}</td>
+        <td>${Math.round(p.total)}</td><td>${Math.round(p.hvac)}</td>
+        <td>${Math.round(p.light)}</td></tr>`).join("") ||
+    `<tr><td colspan="4">no samples yet</td></tr>`;
+}
+
+function drawStateTable() {
+  const rows = [];
+  for (const [name, r] of Object.entries(STATE.rooms ?? {})) {
+    rows.push(`<tr><td class="name">${name} room</td>
+      <td>${r.occupancy ? "occupied" : "empty"}</td><td>—</td>
+      <td>${(r.temp_c ?? 0).toFixed(1)}°C · ${r.humidity ?? 0}% RH · ${r.lux ?? 0} lux</td></tr>`);
+  }
+  for (const [key, l] of Object.entries(STATE.loads ?? {})) {
+    rows.push(`<tr><td class="name">${key}</td><td>${l.state}</td>
+      <td>${Math.round(l.watts ?? 0)} W</td><td>—</td></tr>`);
+  }
+  const u = STATE.user ?? {};
+  rows.push(`<tr><td class="name">phone (user)</td><td>${u.presence ?? "?"}</td><td>—</td>
+    <td>${u.distance_m ?? 0} m from home · battery ${u.battery ?? "?"}%</td></tr>`);
+  document.getElementById("tbody-state").innerHTML = rows.join("");
+}
+
+function drawRecos(recos) {
+  const el = document.getElementById("recos");
+  if (!recos.length) {
+    el.innerHTML = `<div class="empty">No waste detected. Everything running is in use.</div>`;
+    return;
+  }
+  const applied = new Set(STATE.applied_ids ?? []);
+  el.innerHTML = recos.map(r => {
+    const s = SEV[r.severity] ?? SEV.warning;
+    const isApplied = applied.has(r.id);
+    const control = isApplied
+      ? `<span class="applied">✓ Applied — saving realized</span>`
+      : `<button class="apply" data-reco="${esc(r.id)}">Apply — turn it off</button>`;
+    return `
+    <div class="reco">
+      <div class="strip" style="background:${s.color}"></div>
+      <div class="inner">
+        <div class="sev"><span class="icon" style="color:${s.color}">${s.icon}</span>${s.label}
+          <span class="badge">${r.narrated_by === "llm" ? "local LLM" : "template"}</span></div>
+        <h3>${esc(r.title)}</h3>
+        <p>${esc(r.body)}</p>
+        <div class="figs">
+          <span class="fig">cost <b>$${(r.usd ?? 0).toFixed(2)}</b></span>
+          <span class="fig">energy <b>${(r.kwh ?? 0).toFixed(2)}</b> kWh</span>
+          <span class="fig">carbon <b>${(r.co2_kg ?? 0).toFixed(2)}</b> kg</span>
+        </div>
+        <div class="chips">
+          ${(r.actions ?? []).map(a => `<span class="chip">${esc(a)}</span>`).join("")}
+          ${control}
+        </div>
+        <div class="refused" id="refused-${esc(r.id)}" style="display:none"></div>
+        <details class="audit">
+          <summary>Audit this number</summary>
+          <div class="body">
+            <div>Rule <b>${esc(r.rule_name)}</b> · room ${esc(r.room)}</div>
+            <code>${esc(r.formula ?? "")}</code>
+            <div>Evidence that triggered it:</div>
+            <ul>${(r.evidence ?? []).map(e => `<li>${esc(e)}</li>`).join("")}</ul>
+            <div style="margin-top:6px;color:var(--text-muted)">Power figure source: ${esc(r.source ?? "—")}</div>
+          </div>
+        </details>
+      </div>
+    </div>`;
+  }).join("");
+
+  el.querySelectorAll(".apply").forEach(btn => {
+    btn.onclick = () => applyReco(btn.dataset.reco, btn);
+  });
+}
+
+/* Approve a recommendation -> hub commands the UNO Q -> servo/relay acts. */
+async function applyReco(recoId, btn) {
+  const old = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = "Actuating…";
+  const note = document.getElementById("refused-" + recoId);
+  if (note) note.style.display = "none";
+
+  try {
+    const r = await fetch("/api/apply", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ reco_id: recoId, action: "off", approved_by: "dashboard" })
+    });
+    const j = await r.json();
+    if (r.status === 409 && note) {
+      // The comfort guardrail refused to act. This is a feature, not an error.
+      note.textContent = "⚠ " + (j.reason ?? "Refused by the comfort guardrail.");
+      note.style.display = "block";
+      btn.disabled = false;
+      btn.textContent = old;
+      return;
+    }
+    if (!j.ok) throw new Error(j.error ?? "apply failed");
+    btn.textContent = "✓ Applied";
+  } catch (err) {
+    btn.disabled = false;
+    btn.textContent = old;
+    if (note) {
+      note.textContent = "⚠ " + err;
+      note.style.display = "block";
+    }
+  }
+}
+
+function esc(s) {
+  return String(s ?? "").replace(/[&<>"]/g, c =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+}
+
+/* ---------------- controls ---------------- */
+async function setPresence(p) {
+  await fetch("/api/presence", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ presence: p })
+  });
+  document.getElementById("btn-home").classList.toggle("active", p === "home");
+  document.getElementById("btn-away").classList.toggle("active", p === "away");
+}
+document.getElementById("btn-home").onclick = () => setPresence("home");
+document.getElementById("btn-away").onclick = () => setPresence("away");
+
+function setView(v) {
+  view = v;
+  document.getElementById("chart-wrap").classList.toggle("hidden", v !== "chart");
+  document.getElementById("table-wrap").classList.toggle("hidden", v !== "table");
+  document.getElementById("btn-chart").classList.toggle("active", v === "chart");
+  document.getElementById("btn-table").classList.toggle("active", v === "table");
+  if (v === "chart") drawChart();
+}
+document.getElementById("btn-chart").onclick = () => setView("chart");
+document.getElementById("btn-table").onclick = () => setView("table");
+
+document.getElementById("btn-deep").onclick = async (e) => {
+  const b = e.target; const old = b.textContent;
+  b.textContent = "Analyzing on AI Cloud 100…"; b.disabled = true;
+  try {
+    const r = await fetch("/api/deep_report", { method: "POST" });
+    const j = await r.json();
+    alert("WEEKLY DEEP REPORT\n\n" + (j.summary ?? JSON.stringify(j, null, 2)) +
+      "\n\nPatterns:\n" + (j.patterns ?? []).map(p => " • " + p).join("\n") +
+      "\n\nPlan:\n" + (j.weekly_plan ?? []).map(p => ` • ${p.action} — $${p.est_monthly_usd}/mo (${p.effort})`).join("\n"));
+  } catch (err) {
+    alert("Deep report failed: " + err);
+  } finally { b.textContent = old; b.disabled = false; }
+};
+
+window.addEventListener("resize", () => { if (view === "chart") drawChart(); });
+connect();
+</script>
+</body>
+</html>

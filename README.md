@@ -1,0 +1,102 @@
+# AI Home Energy Concierge — hackathon packet
+
+Everything needed to execute the project on site without Claude. **Copy this whole
+folder to a USB stick and push `code/` to your GitHub repo before Monday.**
+
+Event: Snapdragon Multiverse 2026 · Mon Aug 3 – Fri Aug 7 · submit Fri **1:00 PM**, demo 1:30 PM
+
+---
+
+## Read in this order
+
+| File | What it is | When |
+|---|---|---|
+| **`04_ORGANIZER_REQUIREMENTS.md`** | **compliance checklist from the organizer decks — tick every box** | **Read first** |
+| **`00_MASTER_PLAN.md`** | Architecture, the 5 de-risking decisions, day-by-day plan, roles, cut list | Before kickoff |
+| **`01_LLM_PROMPT_PACK.md`** | Copy-paste prompts for the on-site LLM + the **QUAD** section | All week |
+| **`02_DEMO_SCRIPT.md`** | Minute-by-minute 5-min demo, slides, Q&A prep | Thursday |
+| **`03_SETUP_CHEATSHEET.md`** | Every command: GenieX, QUAD, broker, UNO Q, actuator, phone | Day 1 and demo morning |
+| **`code/`** | Working, tested backbone — clone into the repo Day 1 | Day 1 |
+
+## What the organizer documents changed
+
+This packet was revised after two organizer documents arrived. The three things that
+moved:
+
+1. **Our archetype is E — IoT Sensor → Actuator Physical AI.** *"Close the loop from
+   sensing to physical action."* The first draft explicitly excluded actuation; that was
+   wrong and is now reversed. The system physically switches loads off, with human
+   approval.
+2. **The rubric is point-weighted, and Technical Implementation is 40 of 100** — scored on
+   latency, resource use and energy efficiency. So we measure: `hub/benchmark.py` plus
+   QUAD's `/quad-profile` on real silicon.
+3. **Several hard submission requirements we would have failed:** an open-source license
+   file, every member's name *and email* in the README, and **every team member must
+   submit a feedback form** (gates prize eligibility). All now tracked.
+
+Also newly known: **GenieX** gives us an NPU-backed OpenAI-compatible endpoint on
+`:18181`, and QUAD's `generate_code` stage is **blocked by gap G6** — which does not
+affect us, because our sensor and actuator code is hand-written and tested.
+
+## What is already built and verified
+
+The code in `code/` is not pseudocode. It was run end-to-end on Windows on Arm:
+
+- **32/32 smoke test checks pass** (`python smoke_test.py`)
+- All **7 rules** fire; the comfort guardrail suppresses advice **and refuses actuation**
+- **Real MQTT** path verified: simulator → broker → hub → rules → narration → dashboard
+- **The full actuation loop verified**: approve → command → UNO Q executes → confirmation
+  → saving booked as realized (see `dashboard_actuated.png`)
+- **Measured performance**: rules engine 0.027 ms p50, edge filtering removes **88.7%** of
+  broker traffic, 32.9 MB peak RSS
+- **Every fallback tested with its dependency killed**: no LLM, no cloud, no broker,
+  no hardware, no servo
+
+Five real bugs were found and fixed during verification:
+1. `uvicorn` without `[standard]` → WebSocket 404, dashboard silently blank
+2. Windows-invalid `strftime('%-I')` → R6 crashed
+3. Clock-jump inflation → a $1.17 phantom finding outranking the critical one
+4. **MQTT subscription registered outside `on_connect`** → silently lost, so the UNO Q
+   never received commands. Subscriptions must be re-established on every connect.
+5. Applied findings were re-narrated forever → now suppressed once acted on
+
+Bug 1 is the one most likely to cost you an hour on site; bug 4 is the one most likely to
+break the actuation demo. Both are flagged in the cheatsheet and the prompt pack.
+
+## First 30 minutes on Day 1
+
+```bash
+pip install -r code/requirements.txt      # note: uvicorn[standard], not plain uvicorn
+cd code && python smoke_test.py           # expect 32/32
+python hub/benchmark.py                   # your baseline numbers
+python hub/server.py                      # then open the printed LAN URL
+```
+
+Then: fill the **team table** in `code/README.md` (names *and* emails), confirm the
+**submission deadline** at office hours (the decks say 12:00 PM and 1:00 PM — assume
+12:00), freeze the MQTT contract with your team, and assign the five roles from
+`00_MASTER_PLAN.md` §2.
+
+## The four things that win this
+
+1. **The loop closes, and safely.** Physical actuation with human approval, and R7 gating
+   the actuator — the system refuses to switch off the A/C at 29 °C even when asked. That
+   satisfies the archetype *and* gives you the best safety story in the room.
+2. **Auditable arithmetic.** Python computes every number; the LLM only phrases it. Every
+   figure expands to its formula. This answers the judges' hardest question before they
+   ask, and matches QUAD's own "honest, not magic" framing.
+3. **Measured, not claimed.** 40 points ride on latency and efficiency. Most teams will
+   have adjectives; you will have a table and a QUAD profile.
+4. **Graceful degradation you can demo.** Five fallback rungs, rehearsed. A demo with
+   fallbacks engaged and an honest explanation beats a broken one.
+
+## Non-negotiables
+
+- **Thursday 5 PM is the real deadline.** Friday morning is buffer only.
+- **Record the demo video Thursday — including the servo physically moving.** For
+  Archetype E that shot is your insurance.
+- **Submit by 10:30 AM Friday** (deadline 12:00 PM). Demo order is randomized and emailed
+  Thursday morning — assume you are first.
+- **Every team member submits the feedback form.** No exceptions; it gates the prize.
+- 35 of 100 points are documentation and presentation. Budget Thursday for them; do not
+  spend it adding features.

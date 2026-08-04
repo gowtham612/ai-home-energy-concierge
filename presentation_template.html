@@ -1,0 +1,965 @@
+<!DOCTYPE html>
+<!--
+  AI Home Energy Concierge — presentation deck.
+
+  Self-contained: no CDN, no framework, no build step. Screenshots are embedded as
+  base64 by build_presentation.py, so this single file works offline and on any machine.
+
+  Navigation:  arrow keys / space / click  ·  F = fullscreen  ·  O = overview  ·  P = print
+  Colours follow the dashboard's validated dark palette so the deck and the product
+  read as one system.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AI Home Energy Concierge — Snapdragon Multiverse 2026</title>
+<style>
+  :root {
+    --surface:  #1a1a19;
+    --page:     #0d0d0d;
+    --raised:   #212120;
+    --primary:  #ffffff;
+    --secondary:#c3c2b7;
+    --muted:    #898781;
+    --grid:     #2c2c2a;
+    --border:   rgba(255,255,255,0.10);
+
+    --s1: #3987e5;   /* blue   — primary accent */
+    --s2: #d95926;   /* orange — second series */
+    --s3: #199e70;   /* aqua   — third series  */
+
+    --good:     #0ca30c;
+    --warning:  #fab219;
+    --serious:  #ec835a;
+    --critical: #d03b3b;
+
+    --sans: system-ui, -apple-system, "Segoe UI", sans-serif;
+    --mono: ui-monospace, "Cascadia Code", "Consolas", monospace;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    background: var(--page); color: var(--primary);
+    font-family: var(--sans); overflow: hidden;
+  }
+
+  /* ---------- slide frame ---------- */
+  .deck { position: relative; width: 100vw; height: 100vh; }
+  .slide {
+    position: absolute; inset: 0;
+    display: none;
+    flex-direction: column;
+    padding: 46px 62px 62px;
+    animation: fade .22s ease;
+  }
+  .slide.active { display: flex; }
+  @keyframes fade { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+
+  h1 { font-size: 44px; font-weight: 600; letter-spacing: -0.025em; line-height: 1.1; }
+  h2 {
+    font-size: 27px; font-weight: 600; letter-spacing: -0.02em;
+    margin-bottom: 4px; flex: none;
+  }
+  .kicker {
+    font-size: 12px; font-weight: 600; text-transform: uppercase;
+    letter-spacing: .10em; color: var(--s1); margin-bottom: 12px; flex: none;
+  }
+  .sub { color: var(--secondary); font-size: 15px; line-height: 1.55; }
+  .sub.big { font-size: 19px; }
+  h2 + .sub { margin-bottom: 22px; flex: none; }
+  /* Centre the body block vertically so slides do not sit top-heavy with a band
+     of dead space underneath. */
+  .body { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; gap: 16px; justify-content: center; }
+  .body.top { justify-content: flex-start; }
+
+  strong { color: var(--primary); font-weight: 600; }
+  em { color: var(--secondary); font-style: italic; }
+  code {
+    font-family: var(--mono); font-size: .88em;
+    background: rgba(0,0,0,.42); padding: 2px 6px; border-radius: 4px;
+    color: var(--secondary);
+  }
+
+  /* ---------- title slide ---------- */
+  .title-slide { justify-content: center; padding-left: 90px; }
+  .title-slide h1 { font-size: 62px; max-width: 15ch; }
+  .title-slide .tagline {
+    font-size: 22px; color: var(--secondary); margin-top: 20px; max-width: 44ch; line-height: 1.5;
+  }
+  .title-slide .meta {
+    margin-top: 42px; font-size: 14px; color: var(--muted);
+    display: flex; gap: 10px; flex-wrap: wrap; align-items: center;
+  }
+  .pill {
+    border: 1px solid var(--border); border-radius: 20px;
+    padding: 5px 13px; font-size: 12.5px; color: var(--secondary);
+  }
+  .pill.accent { border-color: var(--s1); color: var(--s1); }
+
+  /* ---------- generic blocks ---------- */
+  .card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 10px; padding: 16px 18px;
+  }
+  .card h3 {
+    font-size: 14px; font-weight: 600; margin-bottom: 6px;
+    display: flex; align-items: center; gap: 7px;
+  }
+  .card p { font-size: 13.5px; color: var(--secondary); line-height: 1.55; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; flex: none; }
+
+  .cols  { display: grid; gap: 14px; }
+  .c2 { grid-template-columns: 1fr 1fr; }
+  .c3 { grid-template-columns: repeat(3, 1fr); }
+  .c4 { grid-template-columns: repeat(4, 1fr); }
+  .split { display: grid; grid-template-columns: 1.05fr 1fr; gap: 26px; align-items: start; }
+  .split.wide-left { grid-template-columns: 1.5fr 1fr; }
+
+  ul { list-style: none; display: flex; flex-direction: column; gap: 9px; }
+  li { font-size: 14.5px; color: var(--secondary); line-height: 1.5; padding-left: 17px; position: relative; }
+  li::before {
+    content: ""; position: absolute; left: 0; top: .55em;
+    width: 5px; height: 5px; border-radius: 50%; background: var(--s1);
+  }
+  li.good::before { background: var(--good); }
+  li.warn::before { background: var(--warning); }
+  li.crit::before { background: var(--critical); }
+
+  table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+  th, td { text-align: left; padding: 8px 11px; border-bottom: 1px solid var(--grid); vertical-align: top; }
+  th { color: var(--muted); font-weight: 500; font-size: 11.5px; text-transform: uppercase; letter-spacing: .05em; }
+  td { color: var(--secondary); }
+  td.k { color: var(--primary); font-weight: 500; }
+  td.num { font-family: var(--mono); font-variant-numeric: tabular-nums; color: var(--primary); }
+  tr.hl td { background: rgba(57,135,229,.07); }
+
+  pre {
+    font-family: var(--mono); font-size: 11.5px; line-height: 1.45;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 9px; padding: 15px 17px; color: var(--secondary);
+    overflow: auto; white-space: pre;
+  }
+  pre .em { color: var(--s1); font-weight: 600; }
+
+  .shot {
+    border: 1px solid var(--border); border-radius: 9px;
+    width: 100%; display: block; background: var(--surface);
+  }
+  /* Portrait phone capture: cap the height so it never pushes the slide taller
+     than the viewport (a tall PNG at width:100% otherwise overflows badly). */
+  .shot.portrait {
+    width: auto; max-width: 100%;
+    max-height: 62vh; margin: 0 auto;
+  }
+  .caption { font-size: 11.5px; color: var(--muted); margin-top: 7px; line-height: 1.45; }
+
+  /* ---------- stat tiles ---------- */
+  .stat { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 15px 17px; }
+  .stat .label { font-size: 11.5px; color: var(--secondary); margin-bottom: 5px; }
+  .stat .value { font-size: 31px; font-weight: 600; letter-spacing: -0.02em; line-height: 1.05; }
+  .stat .unit  { font-size: 14px; font-weight: 400; color: var(--secondary); margin-left: 3px; }
+  .stat .foot  { font-size: 11px; color: var(--muted); margin-top: 5px; line-height: 1.4; }
+  .stat.hero .value { font-size: 46px; }
+  .stat.g .value { color: var(--good); }
+  .stat.b .value { color: var(--s1); }
+
+  .quote {
+    border-left: 2px solid var(--s1); padding: 3px 0 3px 16px;
+    font-size: 15px; color: var(--secondary); line-height: 1.55;
+  }
+  .callout {
+    background: rgba(57,135,229,.08); border: 1px solid rgba(57,135,229,.30);
+    border-radius: 9px; padding: 13px 16px; font-size: 13.5px; color: var(--secondary); line-height: 1.55;
+  }
+  .callout.warn { background: rgba(250,178,25,.07); border-color: rgba(250,178,25,.30); }
+  .callout.good { background: rgba(12,163,12,.07); border-color: rgba(12,163,12,.30); }
+
+  .flow { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; font-size: 13px; }
+  .flow span {
+    border: 1px solid var(--border); border-radius: 7px; padding: 8px 12px;
+    color: var(--secondary); background: var(--surface);
+  }
+  .flow span.act { border-color: var(--s1); color: var(--s1); font-weight: 600; }
+  .flow span.ok  { border-color: var(--good); color: var(--good); font-weight: 600; }
+  .flow i { color: var(--muted); font-style: normal; }
+
+  /* ---------- chrome ---------- */
+  .num-badge {
+    position: fixed; bottom: 20px; right: 26px; font-size: 11.5px;
+    color: var(--muted); font-variant-numeric: tabular-nums; z-index: 20;
+  }
+  .progress {
+    position: fixed; bottom: 0; left: 0; height: 2px;
+    background: var(--s1); transition: width .22s ease; z-index: 20;
+  }
+  .hint {
+    position: fixed; bottom: 18px; left: 26px; font-size: 11px; color: var(--muted);
+    z-index: 20; transition: opacity .5s;
+  }
+
+  /* ---------- overview ---------- */
+  .overview {
+    position: fixed; inset: 0; background: rgba(5,5,5,.97); z-index: 40;
+    display: none; padding: 34px; overflow: auto;
+  }
+  .overview.show { display: block; }
+  .overview h3 { font-size: 13px; color: var(--muted); margin-bottom: 16px; text-transform: uppercase; letter-spacing: .08em; }
+  .ov-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(215px, 1fr)); gap: 11px; }
+  .ov-item {
+    border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px;
+    cursor: pointer; background: var(--surface);
+  }
+  .ov-item:hover { border-color: var(--s1); }
+  .ov-item .n { font-size: 10.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .ov-item .t { font-size: 13px; margin-top: 3px; line-height: 1.35; }
+
+  @media print {
+    body { overflow: visible; background: #fff; }
+    .slide { display: flex !important; position: relative; height: 190mm; page-break-after: always; border-bottom: none; }
+    .num-badge, .progress, .hint, .overview { display: none !important; }
+  }
+</style>
+</head>
+<body>
+
+<div class="deck" id="deck">
+
+  <!-- 1 ─────────────────────────────────────────── -->
+  <section class="slide title-slide active">
+    <h1>AI Home Energy Concierge</h1>
+    <p class="tagline">
+      A multi-device AI system that notices wasted household energy, explains what it is
+      costing you — and, with your approval, <strong>physically switches it off</strong>.
+    </p>
+    <div class="meta">
+      <span class="pill accent">Archetype E · IoT Sensor → Actuator Physical AI</span>
+      <span class="pill">Snapdragon Multiverse 2026</span>
+      <span class="pill">Qualcomm San Diego</span>
+    </div>
+    <div class="meta" style="margin-top:16px">
+      <span>Snapdragon X Elite · Galaxy S25 · Arduino UNO Q · Cloud AI 100</span>
+    </div>
+  </section>
+
+  <!-- 2 ─────────────────────────────────────────── -->
+  <section class="slide">
+    <div class="kicker">The problem</div>
+    <h2>Devices waste energy because none of them can see the whole picture</h2>
+    <div class="body">
+      <div class="split">
+        <div style="display:flex;flex-direction:column;gap:16px">
+          <ul>
+            <li>Your <strong>air conditioner</strong> does not know you left the house.</li>
+            <li>Your <strong>lights</strong> do not know the sun is out.</li>
+            <li>In San Diego, SDG&amp;E charges <strong>81% more per kWh</strong> between
+                4 PM and 9 PM — so <em>when</em> a load runs matters as much as <em>whether</em>.</li>
+          </ul>
+          <div class="callout">
+            A motion sensor sees an occupied room and concludes everything is fine — at noon,
+            with the blinds open and every light on. <strong>No single device has enough
+            context to be right.</strong>
+          </div>
+        </div>
+        <div class="cols c2">
+          <div class="stat"><div class="label">On-peak rate</div><div class="value">$0.58<span class="unit">/kWh</span></div><div class="foot">4–9 PM daily, SDG&amp;E TOU-DR1</div></div>
+          <div class="stat"><div class="label">Off-peak rate</div><div class="value">$0.32<span class="unit">/kWh</span></div><div class="foot">the same kWh, 81% cheaper</div></div>
+          <div class="stat b"><div class="label">A/C left on, 2 h, on-peak</div><div class="value">$1.28</div><div class="foot">2.2 kWh · 0.55 kg CO₂</div></div>
+          <div class="stat b"><div class="label">Annualised, 4 nights a week</div><div class="value">$265</div><div class="foot">one appliance, one habit</div></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 3 ─────────────────────────────────────────── -->
+  <section class="slide">
+    <div class="kicker">What it does</div>
+    <h2>Sense → reason → recommend → approve → <span style="color:var(--s1)">act</span> → confirm</h2>
+    <p class="sub">The loop closes on real hardware, but a human authorises every physical action.</p>
+    <div class="body">
+      <div class="flow">
+        <span>UNO Q senses</span><i>→</i>
+        <span>hub fuses context</span><i>→</i>
+        <span>7 rules fire</span><i>→</i>
+        <span>Python computes $</span><i>→</i>
+        <span>LLM explains</span><i>→</i>
+        <span class="act">user approves</span><i>→</i>
+        <span class="act">servo flips the switch</span><i>→</i>
+        <span class="ok">saving realized</span>
+      </div>
+      <div class="cols c3" style="margin-top:6px">
+        <div class="card">
+          <h3><i class="dot" style="background:var(--s1)"></i>It explains itself</h3>
+          <p>Plain-language recommendations with a dollar figure, a kWh figure, and a carbon
+             figure — every one of them traceable to a formula shown in the UI.</p>
+        </div>
+        <div class="card">
+          <h3><i class="dot" style="background:var(--s2)"></i>It acts physically</h3>
+          <p>Approve on the phone and the UNO Q drives a servo that presses a real light
+             switch, then reports back. The saving moves from <em>avoidable</em> to
+             <strong>realized</strong>.</p>
+        </div>
+        <div class="card">
+          <h3><i class="dot" style="background:var(--good)"></i>It knows when to refuse</h3>
+          <p>The comfort guardrail gates the actuator. Ask it to kill the A/C at 29 °C and it
+             <strong>declines</strong> — with a reason.</p>
+        </div>
+      </div>
+      <div class="callout" style="margin-top:2px">
+        <strong>The recommendation is impossible on any single device.</strong> "Your A/C is
+        cooling an empty house" needs phone presence <em>and</em> room occupancy <em>and</em>
+        load state <em>and</em> the tariff window — fused together, in one place.
+      </div>
+    </div>
+  </section>
+
+  <!-- 4 ─────────────────────────────────────────── -->
+  <section class="slide">
+    <div class="kicker">Architecture</div>
+    <h2>Four tiers — and where each piece of intelligence lives is a decision</h2>
+    <div class="body">
+      <div class="split wide-left">
+<pre>
++------------------------------------+
+|  Arduino UNO Q                     |
+|  +--------------+ +--------------+ |
+|  | STM32U585    | | Dragonwing   | |  MQTT over Wi-Fi
+|  | Cortex-M33   | | QRB2210      | |----------------+
+|  | (Zephyr)     |>| Debian/Python| |                |
+|  | PIR/LDR/temp |<| MQTT client  | |&lt;--- commands   |
+|  | <span class="em">SERVO / RELAY</span>| | edge filter  | |                |
+|  +--------------+ +--------------+ |                v
++------------------------------------+   +---------------------------+
+                  ^                      | Copilot+ PC               |
+                  | <span class="em">physical action</span>      | Snapdragon X Elite        |
+                  |                      | <span class="em">45 TOPS NPU</span> ORCHESTRATOR |
++-----------------------------+          |                           |
+|  Galaxy S25                 |          |  mosquitto broker         |
+|  Snapdragon 8 Elite         |--------->|  FastAPI + WebSocket      |
+|  PWA: presence, geofence,   |          |  rules engine (determ.)   |
+|  notifications, <span class="em">APPROVE</span>     |          |  energy model (determ.)   |
++-----------------------------+          |  GenieX LLM -- narration  |
+                                         |  <span class="em">R7 gate -- blocks unsafe</span>  |
+       +-----------------------+         |       physical action     |
+       | Qualcomm Cloud AI 100 |&lt;--------|  deep report (off-path)   |
+       | weekly deep report    |         +------------+--------------+
+       +-----------------------+                      | WebSocket
+                                                      v
+                                            Dashboard (browser)
+</pre>
+        <div>
+          <table>
+            <thead><tr><th>Tier</th><th>Intelligence</th><th>Why here</th></tr></thead>
+            <tbody>
+              <tr><td class="k">STM32U585<br><span style="color:var(--muted);font-size:12px">Zephyr, MCU</span></td>
+                  <td>1 Hz sampling;<br><strong>actuator drive</strong></td>
+                  <td>hard real time, no OS jitter</td></tr>
+              <tr><td class="k">Dragonwing<br><span style="color:var(--muted);font-size:12px">QRB2210, Debian</span></td>
+                  <td>smoothing, occupancy FSM, change-triggered publish</td>
+                  <td>cuts broker traffic <strong>89%</strong>; raw data stays local</td></tr>
+              <tr class="hl"><td class="k">X Elite<br><span style="color:var(--muted);font-size:12px">45 TOPS NPU</span></td>
+                  <td>rules, energy model, GenieX LLM, safety gate</td>
+                  <td>sub-2 s narration; occupancy never leaves the house</td></tr>
+              <tr><td class="k">Cloud AI 100</td>
+                  <td>larger model, weekly patterns</td>
+                  <td>seconds are fine off the critical path</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 5 ─────────────────────────────────────────── -->
+  <section class="slide">
+    <div class="kicker">Output · the operator view</div>
+    <h2>Open findings, ranked by cost, each one auditable</h2>
+    <div class="body">
+      <div class="split wide-left">
+        <div>
+          <img class="shot" src="__DASH_OPEN__" alt="Dashboard showing 1340 W draw, two open findings with Apply buttons">
+          <p class="caption">Live dashboard. Two open findings; both carry an <strong>Apply</strong> control.
+             "Avoidable today" and "Realized by acting" are separate tiles — advice versus outcome.</p>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:13px">
+          <div class="card">
+            <h3><i class="dot" style="background:var(--critical)"></i>Critical — cooling an empty home</h3>
+            <p>Fires within one 5-second cycle of the phone reporting <em>away</em> while HVAC runs.
+               $0.05 and climbing, shown live.</p>
+          </div>
+          <div class="card">
+            <h3><i class="dot" style="background:var(--warning)"></i>Warning — daylight is doing the job</h3>
+            <p>640 lux measured with the lights still on. A motion sensor alone would see an
+               occupied room and stay silent.</p>
+          </div>
+          <div class="callout">
+            Every card expands to <strong>"Audit this number"</strong>: the formula, the evidence
+            that triggered the rule, and the source of the wattage figure.
+          </div>
+          <div class="callout warn">
+            The <code>TEMPLATE</code> badge shows which narrator produced the text — the local
+            LLM, or the deterministic fallback. <strong>Nothing is hidden from the operator.</strong>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 6 ─────────────────────────────────────────── -->
+  <section class="slide">
+    <div class="kicker">Output · the loop closing</div>
+    <h2>Approve once — the switch physically flips and the saving becomes real</h2>
+    <div class="body">
+      <div class="split wide-left">
+        <div>
+          <img class="shot" src="__DASH_ACT__" alt="Dashboard after approval: 240 W, realized saving in green">
+          <p class="caption">The same dashboard seconds later. Draw collapsed
+             <strong>1340 W → 240 W</strong>, the chart shows the drop, the card reads
+             "✓ Applied — saving realized".</p>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:12px">
+          <div class="cols c2">
+            <div class="stat"><div class="label">Before</div><div class="value">1340<span class="unit">W</span></div><div class="foot">A/C + lights, on-peak</div></div>
+            <div class="stat g"><div class="label">After</div><div class="value">240<span class="unit">W</span></div><div class="foot">A/C physically off</div></div>
+          </div>
+          <div class="stat g"><div class="label">Realized by acting</div><div class="value">$0.05</div><div class="foot">1 action applied · 0.09 kWh avoided · booked as realized, not merely avoidable</div></div>
+          <div class="callout good">
+            <strong>This is the archetype requirement.</strong> Command published → UNO Q drove
+            the servo → confirmation returned → the hub closed the finding. Verified end to end,
+            not simulated.
+          </div>
+          <div class="callout">
+            The confirmation reports <code>source</code> honestly —
+            <code>mcu_serial</code>, <code>simulated</code>, or <code>serial_error</code>. It never
+            claims a physical action that did not happen.
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 7 ─────────────────────────────────────────── -->
+  <section class="slide">
+    <div class="kicker">Output · the phone</div>
+    <h2>The phone contributes context — and authorises the action</h2>
+    <div class="body">
+      <div class="split" style="grid-template-columns:.62fr 1fr;align-items:center">
+        <div>
+          <img class="shot portrait" src="__PHONE__" alt="Phone PWA showing a critical alert and approve control">
+          <p class="caption" style="text-align:center">Progressive web app on the Galaxy S25 — no store,
+             no build step, no CDN. Readable at arm's length.</p>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:13px">
+          <ul>
+            <li><strong>Presence is the one signal nothing else can supply.</strong> Home or away,
+                by geofence or by a large manual toggle.</li>
+            <li class="crit"><strong>Critical alerts buzz.</strong> Notification API, with a visible
+                in-page banner fallback when permission is denied.</li>
+            <li class="good"><strong>Approve &amp; turn it off</strong> is the physical-action control —
+                deliberately the largest target on the screen.</li>
+            <li><strong>A realized-savings banner</strong> turns "you could save $X" into
+                "you saved $X".</li>
+          </ul>
+          <div class="callout warn">
+            Geolocation over plain HTTP is commonly blocked, so the <strong>manual toggle always
+            works</strong> and the geofence is a bonus, never a dependency. Every demo-critical
+            path has a manual equivalent.
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 8 ─────────────────────────────────────────── -->
+  <section class="slide">
+    <div class="kicker">Differentiator 1 of 3</div>
+    <h2>Auditable AI — the model narrates, Python computes</h2>
+    <p class="sub">The usual failure mode of an "AI saves you money" demo is a judge asking
+       <em>"where did that number come from?"</em> and the answer being "the model said so."</p>
+    <div class="body">
+      <div class="split">
+        <div style="display:flex;flex-direction:column;gap:14px">
+          <div class="card">
+            <h3>The architectural rule</h3>
+            <p>The LLM receives <strong>pre-computed</strong> values and may only phrase them. After
+               every call, each numeric field is <strong>overwritten from the deterministic
+               source</strong>. If the prose contradicts the computed figure, the figure wins.</p>
+          </div>
+          <div class="callout">
+            Every estimate carries a <code>formula</code> string that the UI renders verbatim, so any
+            number on screen can be recomputed by hand with a calculator.
+          </div>
+          <ul>
+            <li>All arithmetic lives in one 200-line module with no I/O and no LLM</li>
+            <li>Each wattage figure carries its own <code>source</code> (US DOE, ENERGY STAR)</li>
+            <li>Each finding carries the <strong>evidence</strong> that triggered its rule</li>
+            <li>Heuristics are <strong>labelled as heuristics</strong> in the UI, not hidden</li>
+          </ul>
+        </div>
+        <div>
+<pre>
+<span class="em">Audit this number</span>
+
+Rule  away_with_hvac_on   room  living
+
+1100 W x 7200 s = 2.2000 kWh;
+2.2000 kWh x $0.58/kWh (on_peak) = $1.276;
+2.2000 kWh x 0.25 kg/kWh = 0.5500 kg CO2
+
+Evidence that triggered it:
+ - Phone reports presence AWAY, 2400 m from home
+ - AC reported ON at 1100 W
+ - Running unattended for 120 minutes
+
+Power figure source:
+ Energy Star typical 10k BTU unit
+</pre>
+          <div class="callout good" style="margin-top:13px">
+            Aligned with QUAD's own stated philosophy — <em>"honest, not magic… no fabricated
+            results."</em>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 9 ─────────────────────────────────────────── -->
+  <section class="slide">
+    <div class="kicker">Differentiator 2 of 3</div>
+    <h2>The guardrail gates the actuator — not just the advice</h2>
+    <div class="body">
+      <div class="split">
+        <div style="display:flex;flex-direction:column;gap:14px">
+          <div class="quote">
+            Rule R7 is not advisory. It is enforced as a <strong>pre-flight check inside
+            <code>POST /api/apply</code></strong>, so the system will refuse to switch off the A/C
+            when the room is above 27 °C — <strong>even when a user explicitly asks it to.</strong>
+          </div>
+          <div class="callout warn">
+            <strong>HTTP 409</strong> — <em>"Refused: living is 29.5 °C, above the 27 °C comfort
+            limit — turning the A/C off would make the room uncomfortable."</em>
+          </div>
+          <p class="sub">
+            R7 works at two independent layers: it <strong>removes</strong> findings from the
+            recommendation list, and it <strong>blocks</strong> commands at the actuation boundary.
+            Both are covered by the test suite.
+          </p>
+          <div class="card">
+            <h3><i class="dot" style="background:var(--good)"></i>Why this matters more than the actuation itself</h3>
+            <p>Anything can switch a relay. A system that declines to carry out its own
+               recommendation, and tells you why, is demonstrating <strong>judgment</strong> —
+               and that is the precondition for ever trusting it to act unattended.</p>
+          </div>
+        </div>
+        <div>
+          <table>
+            <thead><tr><th>Rule</th><th>Detects</th></tr></thead>
+            <tbody>
+              <tr><td class="k">R1</td><td>lights on in a room empty &gt; 10 min</td></tr>
+              <tr><td class="k">R2</td><td>HVAC running while the user is away</td></tr>
+              <tr><td class="k">R3</td><td>&gt; 300 lux daylight, lights still on</td></tr>
+              <tr><td class="k">R4</td><td>A/C running with no temperature drop — likely an open window <em>(heuristic, labelled)</em></td></tr>
+              <tr><td class="k">R5</td><td>phantom standby draw during a long absence</td></tr>
+              <tr><td class="k">R6</td><td>deferrable heavy load inside the 4–9 PM peak — charges only the <strong>rate delta</strong></td></tr>
+              <tr class="hl"><td class="k">R7</td><td><strong>suppresses advice and refuses actuation</strong> above 27 °C / below 16 °C</td></tr>
+            </tbody>
+          </table>
+          <div class="callout" style="margin-top:14px">
+            R6 is worth a sentence on its own: running the dryer is legitimate — only its
+            <em>timing</em> is wasteful. So it charges the rate difference, not the whole cycle.
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 10 ────────────────────────────────────────── -->
+  <section class="slide">
+    <div class="kicker">Differentiator 3 of 3 · Technical implementation</div>
+    <h2>Measured, not claimed — an energy app that measures its own energy cost</h2>
+    <p class="sub">Reproduce every figure with <code>python hub/benchmark.py --markdown</code>.
+       Windows on Arm, <code>LLM_ENABLED=0</code> (deterministic path).</p>
+    <div class="body">
+      <div class="cols c4" style="flex:none">
+        <div class="stat hero b"><div class="label">Rules engine, 7 rules</div><div class="value">0.027<span class="unit">ms</span></div><div class="foot">p50 · p95 0.046 ms</div></div>
+        <div class="stat hero"><div class="label">Snapshot → recommendation</div><div class="value">0.035<span class="unit">ms</span></div><div class="foot">rules + math + narration</div></div>
+        <div class="stat hero g"><div class="label">Broker traffic avoided</div><div class="value">88.7<span class="unit">%</span></div><div class="foot">68 published of 600 sampled</div></div>
+        <div class="stat hero"><div class="label">Peak RSS</div><div class="value">32.9<span class="unit">MB</span></div><div class="foot">full reasoning stack</div></div>
+      </div>
+      <div class="split" style="margin-top:4px">
+        <div>
+          <table>
+            <thead><tr><th>Metric</th><th>p50</th><th>p95</th><th></th></tr></thead>
+            <tbody>
+              <tr><td class="k">Energy-model estimate</td><td class="num">0.004</td><td class="num">0.007</td><td>ms</td></tr>
+              <tr><td class="k">Rules engine (7 rules)</td><td class="num">0.027</td><td class="num">0.046</td><td>ms</td></tr>
+              <tr><td class="k">Narration — deterministic</td><td class="num">0.002</td><td class="num">0.005</td><td>ms</td></tr>
+              <tr><td class="k">Narration — GenieX / NPU</td><td class="num">—</td><td class="num">—</td><td>ms <span style="color:var(--muted)">on-site</span></td></tr>
+              <tr><td class="k">Snapshot → recommendations</td><td class="num">0.035</td><td class="num">0.058</td><td>ms</td></tr>
+              <tr class="hl"><td class="k">Broker messages avoided</td><td class="num">88.7</td><td class="num">—</td><td>%</td></tr>
+              <tr><td class="k">Peak RSS</td><td class="num">32.9</td><td class="num">—</td><td>MB</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:12px">
+          <div class="callout">
+            <strong>The reasoning tier costs microseconds.</strong> All the latency that matters is
+            LLM inference — which is precisely why it is the only part we accelerate on the NPU,
+            and why the deterministic fallback is instant when the model is unavailable.
+          </div>
+          <div class="callout good">
+            <strong>Edge filtering removes ~89% of broker traffic.</strong> The UNO Q samples at
+            1 Hz but publishes only on a material change (lux ±15%, temp ±0.3 °C, occupancy
+            transition) or a 10 s heartbeat.
+          </div>
+          <div class="callout warn">
+            If the LLM endpoint is unreachable the benchmark reports that row as
+            <strong>SKIPPED with the reason</strong> — it never substitutes the fallback's timing
+            for the model's. Honest measurement over a flattering number.
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 11 ────────────────────────────────────────── -->
+  <section class="slide">
+    <div class="kicker">Robustness</div>
+    <h2>Every tier degrades gracefully — and each fallback is tested</h2>
+    <p class="sub">Built on the assumption that venue Wi-Fi, a model server, and a servo will all
+       fail at the worst possible moment.</p>
+    <div class="body">
+      <div class="split">
+        <table>
+          <thead><tr><th>Layer</th><th>Primary</th><th>Tested fallback</th></tr></thead>
+          <tbody>
+            <tr><td class="k">Network</td><td>venue Wi-Fi</td><td>PC mobile hotspot</td></tr>
+            <tr><td class="k">Sensors</td><td>PIR / LDR / DHT22</td><td><code>simulator.py</code>, scripted</td></tr>
+            <tr><td class="k">Transport</td><td>MQTT broker</td><td>REST injection endpoints</td></tr>
+            <tr><td class="k">UNO Q link</td><td>Wi-Fi from Dragonwing</td><td><code>bridge.py</code> over USB</td></tr>
+            <tr class="hl"><td class="k">Narration</td><td>GenieX on the NPU</td><td>deterministic template — instant</td></tr>
+            <tr><td class="k">Cloud report</td><td>Cloud AI 100</td><td>deterministic Python report</td></tr>
+            <tr><td class="k">Actuator</td><td>servo on a real switch</td><td>relay → LED + buzzer</td></tr>
+            <tr><td class="k">Presence</td><td>phone geofence</td><td>manual HOME / AWAY toggle</td></tr>
+          </tbody>
+        </table>
+        <div style="display:flex;flex-direction:column;gap:13px">
+          <div class="cols c2">
+            <div class="stat g"><div class="label">Smoke test</div><div class="value">32<span class="unit">/32</span></div><div class="foot">arithmetic · all 7 rules · both guardrail layers · every fallback · live server · full actuation loop</div></div>
+            <div class="stat b"><div class="label">Quickstart</div><div class="value">3<span class="unit">cmds</span></div><div class="foot">no hardware needed to see the whole system work</div></div>
+          </div>
+          <div class="callout">
+            <strong>Nothing hard-fails.</strong> Kill the LLM, the cloud, the broker, the sensors or
+            the servo and the system keeps producing correct recommendations — and says which path
+            it used.
+          </div>
+          <div class="card">
+            <h3>Bugs found and fixed by actually running it</h3>
+            <p><code>uvicorn</code> without <code>[standard]</code> → silent WebSocket 404 ·
+               non-portable <code>strftime</code> on Windows · a clock jump inflating a finding to
+               $1.17 · <strong>an MQTT subscription registered outside <code>on_connect</code>,
+               silently lost</strong> — that last one would have broken the actuation demo on stage.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 12 ────────────────────────────────────────── -->
+  <section class="slide">
+    <div class="kicker">Engineering &amp; tooling</div>
+    <h2>How it is built, and where we deviated on purpose</h2>
+    <div class="body">
+      <div class="split">
+        <div style="display:flex;flex-direction:column;gap:13px">
+          <div class="card">
+            <h3><i class="dot" style="background:var(--s1)"></i>GenieX — the on-device LLM</h3>
+            <p>OpenAI-compatible server on <code>:18181</code>. We chose the <strong>qairt</strong>
+               runtime (AI Hub bundle, NPU-only, fastest) over <strong>llama_cpp</strong> (GGUF
+               <code>Q4_0</code>, more flexible) because narration latency is the only latency that
+               matters here.</p>
+          </div>
+          <div class="card">
+            <h3><i class="dot" style="background:var(--s2)"></i>QUAD — used for measurement</h3>
+            <p><code>/quad-profile</code> and <code>/quad-orchestrate</code> give authoritative NPU
+               latency, power and utilization on real silicon. That is what QUAD is worth to this
+               project.</p>
+          </div>
+          <div class="callout warn">
+            <strong>On gap G6.</strong> QUAD's <code>generate_code</code> stage is blocked for UNO Q
+            sensor/actuator GPIO codegen. We did not need it — the sketch, the MPU publisher and the
+            actuator path are <strong>hand-written and tested</strong>. A pending platform gap did
+            not become a project blocker, and we are not presenting mock output as if it ran.
+          </div>
+        </div>
+        <div>
+<pre>
+code/
+  hub/
+    energy_model.py   all arithmetic, zero I/O
+    rules.py          R1-R7, no LLM
+    llm.py            GenieX + deterministic fallback
+    server.py         MQTT, fusion, WS, <span class="em">/api/apply</span>
+    simulator.py      scripted 90 s demo
+    cloud_report.py   Cloud AI 100 + fallback
+    benchmark.py      latency / RSS / efficiency
+  dashboard/index.html   no build step
+  phone/index.html       no build step
+  arduino/
+    sketch/sketch.ino    sensors + <span class="em">servo</span>
+    uno_q_publisher.py   edge filter + <span class="em">commands</span>
+    bridge.py            USB fallback
+  smoke_test.py       <span class="em">32 checks</span>
+  requirements.txt    6 deps
+  LICENSE             Apache 2.0
+</pre>
+          <div class="callout" style="margin-top:12px">
+            Vanilla HTML/CSS/JS for both UIs — <strong>no npm, no framework, no CDN.</strong> Nothing
+            to install, nothing to break on a blocked network.
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 13 ────────────────────────────────────────── -->
+  <section class="slide">
+    <div class="kicker">Demo · 90 seconds, scripted and reproducible</div>
+    <h2>What you will see, beat by beat</h2>
+    <div class="body">
+      <table>
+        <thead><tr><th style="width:70px">t</th><th>What happens</th><th>What the system does</th></tr></thead>
+        <tbody>
+          <tr><td class="num">0 s</td><td>Home, 6:30 PM, TV + A/C + lights, on-peak</td><td><strong>No findings.</strong> Everything running is in use — a system that nags gets ignored</td></tr>
+          <tr><td class="num">15 s</td><td>You leave; the phone crosses the geofence</td><td>presence → <em>away</em>, distance climbs</td></tr>
+          <tr class="hl"><td class="num">25 s</td><td>Motion times out; loads still running</td><td><strong>R2 critical</strong> + <strong>R1 serious</strong> · phone buzzes · audit panel opens</td></tr>
+          <tr class="hl"><td class="num">35 s</td><td><strong>You tap Approve</strong></td><td><strong>The servo flips the switch.</strong> 1340 W → 240 W · saving booked as <strong>realized</strong></td></tr>
+          <tr class="hl"><td class="num">50 s</td><td>Room is now 29 °C; you ask again</td><td><strong>The system refuses</strong> — R7 gates the actuator, with a reason</td></tr>
+          <tr><td class="num">60 s</td><td>Next morning, 640 lux, lights on</td><td><strong>R3</strong> — context fusion a motion sensor cannot do</td></tr>
+          <tr><td class="num">75 s</td><td>Dryer starts at 5 PM</td><td><strong>R6</strong> — charges only the rate delta; shift it to 9 PM</td></tr>
+          <tr><td class="num">85 s</td><td>"Generate weekly deep report"</td><td>Cloud AI 100 → ranked plan, $130 thermostat, 2.4-month payback</td></tr>
+        </tbody>
+      </table>
+      <div class="cols c2" style="margin-top:4px">
+        <div class="callout good">
+          <strong>Everything downstream of the sensors is real</strong> in every fallback mode —
+          real rules, real arithmetic, real LLM, real dashboard, real actuation. Only the sensor
+          feed is ever simulated, and we say so out loud.
+        </div>
+        <div class="callout">
+          <code>python hub/simulator.py --mode demo</code> replays this exact scenario, printing a
+          caption per beat. <code>--speed 3</code> for rehearsal.
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 14 ────────────────────────────────────────── -->
+  <section class="slide">
+    <div class="kicker">Honest limitations</div>
+    <h2>What we did not do, and what comes next</h2>
+    <div class="body">
+      <div class="split">
+        <ul>
+          <li class="warn"><strong>Load power is modelled, not metered.</strong> Published DOE and
+              ENERGY STAR typicals, each carrying its source in the UI. A clamp meter or smart plug
+              is the obvious next step.</li>
+          <li class="warn"><strong>Lux is uncalibrated.</strong> A photoresistor divider approximates
+              it, so we use it only against a coarse threshold — and the evidence text says so.</li>
+          <li class="warn"><strong>R4 is a heuristic.</strong> We infer an open window from A/C
+              runtime, a temperature stall and humidity. We do not sense the window, and the UI
+              states that plainly.</li>
+          <li><strong>Actuation is human-approved by design.</strong> Not a missing feature — a
+              trust decision. R7 shows the machine refusing its own advice; that architecture is
+              what would make autonomy safe later.</li>
+          <li><strong>One room, one actuator.</strong> The topic contract is already per-room and
+              per-load, so scaling is adding publishers — but we demo depth over breadth.</li>
+        </ul>
+        <div style="display:flex;flex-direction:column;gap:13px">
+          <div class="card">
+            <h3>Next, in order</h3>
+            <p>1 · Real metering on one circuit &nbsp;·&nbsp; 2 · QUAD NPU profile pasted beside the
+               benchmark table &nbsp;·&nbsp; 3 · Multi-room fan-out &nbsp;·&nbsp; 4 · Opt-in
+               autonomy for the loads R7 can prove are safe</p>
+          </div>
+          <div class="callout">
+            The pattern generalises past energy: <strong>deterministic computation, a model that
+            only explains, and a safety gate on the actuator</strong> is a reusable shape for any
+            physical-AI system where being wrong has a cost.
+          </div>
+          <div class="cols c2">
+            <div class="stat"><div class="label">Lines of Python</div><div class="value">2.6<span class="unit">k</span></div><div class="foot">plus 1k of vanilla HTML/JS</div></div>
+            <div class="stat"><div class="label">Third-party deps</div><div class="value">6</div><div class="foot">no framework, no npm, no CDN</div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 15 ────────────────────────────────────────── -->
+  <section class="slide">
+    <div class="kicker">Summary</div>
+    <h2>Four devices producing one insight none of them could reach alone</h2>
+    <div class="body">
+      <div class="cols c2" style="flex:none">
+        <div class="card">
+          <h3><i class="dot" style="background:var(--s1)"></i>1 · Placement of intelligence is the design</h3>
+          <p>Rules at the edge in microseconds. A small model on the NPU for private, low-latency
+             narration. A large model in the cloud for depth. Same problem, four tiers, each chosen
+             against a latency and privacy budget.</p>
+        </div>
+        <div class="card">
+          <h3><i class="dot" style="background:var(--s2)"></i>2 · Auditable AI</h3>
+          <p>The model narrates; Python computes. Every number on screen expands to the formula that
+             produced it. Most LLM demos ask you to trust the number — this one lets you check it.</p>
+        </div>
+        <div class="card">
+          <h3><i class="dot" style="background:var(--s3)"></i>3 · Context fusion unlocks it</h3>
+          <p>Phone presence <em>and</em> room occupancy <em>and</em> load state <em>and</em> the
+             tariff window. No single device in this system could produce the recommendation.</p>
+        </div>
+        <div class="card">
+          <h3><i class="dot" style="background:var(--good)"></i>4 · The loop closes, safely</h3>
+          <p>Physical actuation, human-approved, with a comfort guardrail that can veto the machine's
+             own advice — and does, on stage.</p>
+        </div>
+      </div>
+      <div class="cols c4" style="margin-top:2px">
+        <div class="stat g"><div class="label">Smoke tests</div><div class="value">32<span class="unit">/32</span></div></div>
+        <div class="stat b"><div class="label">Rules latency p50</div><div class="value">0.027<span class="unit">ms</span></div></div>
+        <div class="stat g"><div class="label">Broker traffic cut</div><div class="value">88.7<span class="unit">%</span></div></div>
+        <div class="stat"><div class="label">Quickstart</div><div class="value">3<span class="unit">cmds</span></div></div>
+      </div>
+      <div class="callout good" style="margin-top:2px">
+        <strong>Everything shown has been executed and verified</strong> — the actuation loop, the
+        refusal, the measurements, and every fallback with its dependency killed.
+      </div>
+    </div>
+  </section>
+
+  <!-- 16 ────────────────────────────────────────── -->
+  <section class="slide title-slide">
+    <div class="kicker">Thank you</div>
+    <h1 style="font-size:50px">Questions?</h1>
+    <p class="tagline" style="font-size:19px">
+      <strong>AI Home Energy Concierge</strong> — sense, reason, recommend, approve,
+      <strong style="color:var(--s1)">act</strong>.
+    </p>
+    <div class="meta" style="margin-top:34px">
+      <span class="pill accent">github.com/gowtham612/ai-home-energy-concierge</span>
+      <span class="pill">Apache 2.0</span>
+      <span class="pill">32/32 tests</span>
+      <span class="pill">3-command quickstart</span>
+    </div>
+    <p class="sub" style="margin-top:26px;max-width:70ch">
+      Repo includes the full README with setup from scratch, the benchmark harness, the test
+      suite, the MQTT contract, and an operator's manual covering every run path and fallback.
+    </p>
+  </section>
+
+</div>
+
+<div class="num-badge"><span id="cur">1</span> / <span id="tot">16</span></div>
+<div class="progress" id="bar"></div>
+<div class="hint" id="hint">← → navigate · F fullscreen · O overview · P print</div>
+
+<div class="overview" id="ov">
+  <h3>Slide overview — click to jump</h3>
+  <div class="ov-grid" id="ovGrid"></div>
+</div>
+
+<script>
+const slides = Array.from(document.querySelectorAll('.slide'));
+let idx = 0;
+
+const titles = [
+  "Title — AI Home Energy Concierge",
+  "The problem",
+  "What it does — the closed loop",
+  "Architecture — four tiers",
+  "Output — the operator view",
+  "Output — the loop closing",
+  "Output — the phone",
+  "Auditable AI",
+  "The guardrail gates the actuator",
+  "Measured performance",
+  "Graceful degradation",
+  "Engineering & tooling",
+  "Demo, beat by beat",
+  "Honest limitations",
+  "Summary — four claims",
+  "Questions"
+];
+
+document.getElementById('tot').textContent = slides.length;
+
+function show(n) {
+  idx = Math.max(0, Math.min(slides.length - 1, n));
+  slides.forEach((s, i) => s.classList.toggle('active', i === idx));
+  document.getElementById('cur').textContent = idx + 1;
+  document.getElementById('bar').style.width =
+    ((idx + 1) / slides.length * 100) + 'vw';
+  location.hash = idx + 1;
+}
+
+function toggleOverview(force) {
+  const ov = document.getElementById('ov');
+  const want = force !== undefined ? force : !ov.classList.contains('show');
+  ov.classList.toggle('show', want);
+}
+
+// Build the overview grid once.
+const grid = document.getElementById('ovGrid');
+titles.forEach((t, i) => {
+  const d = document.createElement('div');
+  d.className = 'ov-item';
+  d.innerHTML = `<div class="n">${String(i + 1).padStart(2, '0')}</div><div class="t">${t}</div>`;
+  d.onclick = () => { show(i); toggleOverview(false); };
+  grid.appendChild(d);
+});
+
+document.addEventListener('keydown', (e) => {
+  const ov = document.getElementById('ov').classList.contains('show');
+  switch (e.key) {
+    case 'ArrowRight': case ' ': case 'PageDown': case 'n':
+      e.preventDefault(); show(idx + 1); break;
+    case 'ArrowLeft': case 'PageUp': case 'p':
+      e.preventDefault(); show(idx - 1); break;
+    case 'Home': show(0); break;
+    case 'End':  show(slides.length - 1); break;
+    case 'f': case 'F':
+      if (document.fullscreenElement) document.exitFullscreen();
+      else document.documentElement.requestFullscreen();
+      break;
+    case 'o': case 'O': toggleOverview(); break;
+    case 'P': window.print(); break;
+    case 'Escape': toggleOverview(false); break;
+  }
+  if (/^[0-9]$/.test(e.key) && !ov) {
+    const n = e.key === '0' ? 9 : parseInt(e.key, 10) - 1;
+    if (n < slides.length) show(n);
+  }
+});
+
+// Click to advance, but never when selecting text or hitting a link.
+document.getElementById('deck').addEventListener('click', (e) => {
+  if (window.getSelection().toString()) return;
+  if (e.target.closest('a')) return;
+  show(idx + (e.clientX < window.innerWidth * 0.22 ? -1 : 1));
+});
+
+// Deep-link support: #7 opens slide 7. Also respond to later hash changes so
+// back/forward and hand-edited URLs both work.
+function showFromHash() {
+  const n = parseInt(location.hash.replace('#', ''), 10);
+  show(Number.isFinite(n) && n > 0 ? n - 1 : 0);
+}
+showFromHash();
+window.addEventListener('hashchange', showFromHash);
+
+// Fade the keyboard hint once the deck is clearly in use.
+setTimeout(() => { document.getElementById('hint').style.opacity = '0'; }, 6000);
+</script>
+</body>
+</html>
