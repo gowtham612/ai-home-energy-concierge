@@ -11,12 +11,43 @@ Event: Snapdragon Multiverse 2026 · Mon Aug 3 – Fri Aug 7 · submit Fri **1:0
 
 | File | What it is | When |
 |---|---|---|
-| **`04_ORGANIZER_REQUIREMENTS.md`** | **compliance checklist from the organizer decks — tick every box** | **Read first** |
+| **`CLEANUP_REMINDER.md`** | **⚠ the planning docs are currently public — decide keep-or-remove, and redact the venue credentials** | **Before the judges see the repo** |
+| **`04_ORGANIZER_REQUIREMENTS.md`** | compliance checklist from the organizer decks — tick every box | Read first |
 | **`00_MASTER_PLAN.md`** | Architecture, the 5 de-risking decisions, day-by-day plan, roles, cut list | Before kickoff |
 | **`01_LLM_PROMPT_PACK.md`** | Copy-paste prompts for the on-site LLM + the **QUAD** section | All week |
 | **`02_DEMO_SCRIPT.md`** | Minute-by-minute 5-min demo, slides, Q&A prep | Thursday |
 | **`03_SETUP_CHEATSHEET.md`** | Every command: GenieX, QUAD, broker, UNO Q, actuator, phone | Day 1 and demo morning |
-| **`code/`** | Working, tested backbone — clone into the repo Day 1 | Day 1 |
+| **`05_FILE_STRUCTURE_AND_RUN.md`** | **operator's manual** — every file explained, every run path, troubleshooting | When something breaks |
+| **`presentation.html`** | **the deck** — open in any browser, arrow keys to navigate | Thursday / demo |
+| **`code/`** | Working, tested backbone | Day 1 |
+
+## Live repository
+
+**https://github.com/gowtham612/ai-home-energy-concierge** — public, Apache 2.0, 32 files.
+Verified: a fresh `git clone` passes 32/32 smoke checks with no manual fixes.
+
+Submit that URL via the organizers' Microsoft Form by **Friday 12:00 PM** (target 10:30).
+
+## The presentation
+
+`presentation.html` is a single self-contained file — no server, no network, no
+framework. The three screenshots are embedded as base64, so it works from a USB stick on
+any machine.
+
+| Key | Action |
+|---|---|
+| `→` / `space` / click | next slide |
+| `←` | previous |
+| `F` | fullscreen |
+| `O` | slide overview, click to jump |
+| `P` | print / export to PDF |
+| `1`–`9` | jump to slide |
+
+16 slides: problem · closed loop · architecture · three output screenshots · auditable AI ·
+the guardrail · measured performance · graceful degradation · tooling · demo beats ·
+limitations · summary.
+
+To rebuild after replacing a screenshot: `python build_presentation.py`.
 
 ## What the organizer documents changed
 
