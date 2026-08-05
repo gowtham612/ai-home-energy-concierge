@@ -209,9 +209,15 @@ def r3_daylight_waste(snapshot: Dict, now_dt: datetime) -> List[Finding]:
                 seconds_wasted=dur,
                 headline=f"Daylight is bright enough — {room} lights are redundant",
                 evidence=[
-                    f"Ambient light measured {lux} lux, above the {DAYLIGHT_LUX_THRESHOLD} lux daylight threshold",
-                    f"Lights still ON at {load.get('watts', 0):.0f} W",
-                    "Approximate lux from an uncalibrated photoresistor — treated as a threshold, not a measurement",
+                    f"Ambient light reported as {lux} lux, above the {DAYLIGHT_LUX_THRESHOLD} lux daylight threshold",
+                    f"Lights still ON at {load.get('watts', 0):.0f} W"
+                    + (" (measured by the smart plug)" if load.get("metered") else " (modelled)"),
+                    # Say where the number came from rather than assert a sensor
+                    # we may not have. lux_src is stamped by the MCU firmware
+                    # ("ltr381" = real light sensor, "knob_sim" = declared
+                    # simulation); absent means the phone simulator supplied it.
+                    f"Lux is a threshold input, not a calibrated measurement "
+                    f"(source: {rs.get('lux_src', 'simulator')})",
                 ],
                 suggested_actions=["Turn off the lights", "Open the blinds instead"],
             ), now_dt))

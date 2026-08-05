@@ -46,6 +46,7 @@ POWER_HISTORY_LEN = 60     # 5 min of 5 s samples for the sparkline
 ROOT = Path(__file__).resolve().parent.parent
 DASHBOARD_DIR = ROOT / "dashboard"
 PHONE_DIR = ROOT / "phone"
+SIMULATOR_DIR = ROOT / "simulator"
 
 
 class StateStore:
@@ -380,6 +381,22 @@ async def dashboard():
 @app.get("/phone")
 async def phone():
     return FileResponse(PHONE_DIR / "index.html")
+
+
+@app.get("/simulator")
+async def simulator():
+    """Sensor simulator — stands in for hardware we do not have.
+
+    Served from the hub on purpose: same-origin means no CORS, and the page
+    falls back to location.origin, so it needs no configuration at all when
+    opened at http://<hub>:8000/simulator from a phone or laptop.
+
+    It drives the SAME endpoints a real sensor would (/api/sensor, /api/load,
+    /api/presence) rather than a private back door, so the rules engine cannot
+    tell the difference — which is exactly why the values it sends must stay
+    labelled as simulated wherever they surface.
+    """
+    return FileResponse(SIMULATOR_DIR / "index.html")
 
 
 @app.get("/api/state")

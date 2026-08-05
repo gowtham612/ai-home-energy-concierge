@@ -1,5 +1,25 @@
 # Bring-up guide — getting this running on the Arduino UNO Q
 
+> ## ⚠ SUPERSEDED for the hardware steps — read this first
+>
+> **Steps 2-5 and 9 below describe a breadboard build (PIR on D2, photoresistor
+> on A0, DHT22 on D4, servo on D9) that we never had the parts for.** They are
+> kept for reference and for anyone who does have that hardware.
+>
+> **What was actually built and verified instead** (2026-08-05):
+> a **Modulino Knob** on the Qwiic connector for sensing, **TP-Link Kasa** smart
+> bulb/plug on the LAN for real physical actuation, and a browser **sensor
+> simulator** at `/simulator` for everything else. The full loop is closed:
+> approve → the actual bulb goes dark, confirmed by its own energy meter.
+>
+> - Architecture and reasoning: **`08_HARDWARE_PIVOT_PLAN.md`**
+> - What was built, every gotcha, and how to restart it: **`07_QUAD_SESSION_LOG.md` §0 and §14**
+> - Setup instructions: **`code/README.md`**
+>
+> Steps that still apply as written: **Step 0** (prove the PC side first) and
+> **Step 12** (Plan B, no board at all). Step 1's `/quad-detect` advice is still
+> useful, but the board is now reached over **ADB/USB-C**, not SSH.
+
 Step-by-step, in the order you should actually do it, with a **verification gate after
 every step** so you find problems one at a time instead of debugging four at once.
 

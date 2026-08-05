@@ -19,3 +19,9 @@ Desktop.ini
 .vscode/
 .idea/
 *.swp
+
+# Board-side runtime config (LAN IPs, machine-specific). Copy from board.env.example.
+code/arduino/board.env
+# Local run artifacts
+code/*.log
+code/hub_server*.log

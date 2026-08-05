@@ -21,9 +21,12 @@ import json
 import os
 import queue
 import random
+import asyncio
 import signal
+import socket
 import statistics
 import sys
+import threading
 import time
 from typing import Dict, List, Optional
 
@@ -38,10 +41,23 @@ except ImportError:
     print("paho-mqtt required: pip3 install paho-mqtt", file=sys.stderr)
     sys.exit(1)
 
+# Optional: real physical actuation via TP-Link Kasa smart plugs/bulbs.
+# Soft import — without it the actuator degrades to 'simulated' and says so,
+# exactly like a missing MCU. It must never stop the sensing half from running.
+try:
+    import kasa
+except ImportError:
+    kasa = None
+
 ROOM = os.environ.get("ROOM", "living")
 MQTT_HOST = os.environ.get("MQTT_HOST", "192.168.1.50")
 MQTT_PORT = int(os.environ.get("MQTT_PORT", "1883"))
 BAUD = 115200
+
+# Arduino Router monitor socket — how the MCU's Serial reaches Linux on a UNO Q.
+# See tcp_lines() for why this exists instead of a /dev/ttyACM* device.
+MCU_TCP_HOST = os.environ.get("MCU_TCP_HOST", "127.0.0.1")
+MCU_TCP_PORT = int(os.environ.get("MCU_TCP_PORT", "7500"))
 
 # Publish thresholds — the point of edge filtering.
 LUX_CHANGE_PCT = 0.15         # 15% relative change is material
@@ -53,6 +69,58 @@ SMOOTH_WINDOW = 5             # median-of-5
 LOADS_FILE = "/tmp/loads.json"    # flip loads during the demo with no rewiring
 LOADS_DEFAULT = {"lights": {"state": "off", "watts": 240},
                  "ac": {"state": "off", "watts": 1100}}
+
+# ---------------------------------------------------------------------------
+# Kasa smart-device binding — the real physical actuator.
+#
+# Everything here is env-overridable ON PURPOSE. Venue DHCP will not hand out
+# the same IPs as the bench, so prefer aliases (which travel with the device)
+# and treat hosts as an optimisation. To add a load (e.g. a table fan standing
+# in for HVAC) just extend KASA_LOADS and set KASA_FAN_ALIAS / KASA_FAN_HOST.
+#
+#   KASA_LIGHTS_HOST / KASA_LIGHTS_ALIAS
+#   KASA_AC_HOST     / KASA_AC_ALIAS
+#   KASA_FAN_HOST    / KASA_FAN_ALIAS
+#   KASA_LOADS       comma-separated list, default "lights,ac"
+# ---------------------------------------------------------------------------
+KASA_LOADS = [s.strip() for s in
+              os.environ.get("KASA_LOADS", "lights,ac").split(",") if s.strip()]
+KASA_DEFAULT_ALIASES = {
+    "lights": "Bedroom light 2",   # KL120 bulb  — metered
+    "ac":     "Space heater",      # HS110 plug  — metered
+    "fan":    "",                  # set KASA_FAN_ALIAS when the fan is on the bench
+}
+KASA_DISCOVER_S = float(os.environ.get("KASA_DISCOVER_S", "8"))
+KASA_SETTLE_S = float(os.environ.get("KASA_SETTLE_S", "0.4"))
+KASA_POLL_S = float(os.environ.get("KASA_POLL_S", "5"))   # metered-watts cadence
+# TP-Link firmware serves ONE connection at a time, so a concurrent reader (the
+# Kasa phone app, another script) can make a write raise even though it landed.
+# Retry, and judge success by reading the device back — see KasaBank.switch().
+KASA_SWITCH_RETRIES = int(os.environ.get("KASA_SWITCH_RETRIES", "3"))
+KASA_RETRY_S = float(os.environ.get("KASA_RETRY_S", "0.8"))
+
+# ---------------------------------------------------------------------------
+# Which signals the MCU is allowed to own.
+#
+# The hub merges room state with {**prev, **payload}, so the LAST writer of a
+# key wins. The MCU republishes at 1 Hz, which means anything it emits will
+# overwrite a value POSTed to /api/sensor within a second.
+#
+# That bit us for real: injecting temp_c=29.5 to demo the R7 comfort guardrail
+# silently had no effect, because the knob kept restoring 21.9 and the apply
+# was then allowed instead of refused.
+#
+# So state it explicitly rather than leave it to whoever publishes last:
+#   MCU_SIGNALS=temp_c   (default) the Modulino Knob owns temperature. Turning
+#                        the physical dial past 27 C is the tactile way to drive
+#                        the R7 refusal on stage.
+#   MCU_SIGNALS=         the MCU publishes NO sensor values; the phone/simulator
+#                        owns every signal. Use this when demoing without hands
+#                        on the hardware.
+# Anything the MCU is not allowed to own simply passes to whoever else sets it.
+# ---------------------------------------------------------------------------
+MCU_SIGNALS = [s.strip() for s in
+               os.environ.get("MCU_SIGNALS", "temp_c").split(",") if s.strip()]
 
 RUNNING = True
 
@@ -68,7 +136,14 @@ signal.signal(signal.SIGINT, _stop)
 
 
 def find_port() -> Optional[str]:
-    """The device node differs by image — try the likely ones in order."""
+    """The device node differs by image — try the likely ones in order.
+
+    NOTE: on the Arduino UNO Q this will find nothing, and that is expected —
+    see mcu_tcp_available() below. It is kept for classic Arduino boards
+    attached over USB CDC.
+    """
+    if serial is None:
+        return None
     candidates: List[str] = ["/dev/ttyACM0", "/dev/ttyACM1", "/dev/ttyUSB0"]
     candidates += sorted(glob.glob("/dev/serial/by-id/*"))
     for path in candidates:
@@ -80,6 +155,62 @@ def find_port() -> Optional[str]:
         except Exception:
             continue
     return None
+
+
+def mcu_tcp_available(host: str = MCU_TCP_HOST, port: int = MCU_TCP_PORT,
+                      timeout: float = 2.0) -> bool:
+    """Is the Arduino Router's monitor socket reachable?"""
+    try:
+        s = socket.create_connection((host, port), timeout)
+        s.close()
+        return True
+    except Exception:
+        return False
+
+
+def tcp_lines(host: str = MCU_TCP_HOST, port: int = MCU_TCP_PORT):
+    """Yield telemetry lines from the Arduino Router monitor socket.
+
+    On the UNO Q the MCU's Serial does NOT appear as /dev/ttyACM* on the Linux
+    side. The STM32 talks to the QRB2210 over RPMsg into the `arduino-router`
+    service (/dev/ttyHS1), which republishes the stream on tcp://127.0.0.1:7500.
+    A separate socat unit also mirrors that socket to /dev/ttyGS0, which is what
+    surfaces as a COM port on a USB-attached host PC.
+
+    Verified on Debian 13 / arduino-router with the zephyr core 0.90.0:
+        arduino-router --unix-port /var/run/arduino-router.sock \
+                       --serial-port /dev/ttyHS1 --serial-baudrate 115200
+
+    Reconnects on its own, because the router restarts whenever a sketch is
+    re-flashed and we must not die when that happens mid-demo.
+    """
+    buf = b""
+    while RUNNING:
+        s = None
+        try:
+            s = socket.create_connection((host, port), 5)
+            s.settimeout(2)
+            print(f"[uno_q] MCU monitor connected at tcp://{host}:{port}", flush=True)
+            while RUNNING:
+                try:
+                    chunk = s.recv(512)
+                except socket.timeout:
+                    continue
+                if not chunk:
+                    break          # router closed the stream (re-flash) — reconnect
+                buf += chunk
+                while b"\n" in buf:
+                    line, buf = buf.split(b"\n", 1)
+                    yield line.decode("utf-8", errors="ignore").strip()
+        except Exception as exc:
+            print(f"[uno_q] MCU monitor error: {exc} — retrying in 2s", flush=True)
+            time.sleep(2)
+        finally:
+            if s is not None:
+                try:
+                    s.close()
+                except Exception:
+                    pass
 
 
 class Smoother:
@@ -159,9 +290,13 @@ class Publisher:
     def sensors(self, payload: Dict):
         self.c.publish(f"home/sensors/{ROOM}", json.dumps(payload))
 
-    def load(self, name: str, state: str, watts: float):
+    def load(self, name: str, state: str, watts: float, metered: bool = False):
+        """Publish load state. `metered=True` means `watts` was MEASURED by the
+        device (HS110 plug / KL120 bulb), not taken from the modelled table in
+        hub/energy_model.py — the distinction is carried so a reader can tell."""
         self.c.publish(f"home/loads/{ROOM}/{name}",
-                       json.dumps({"state": state, "watts": watts, "ts": time.time()}))
+                       json.dumps({"state": state, "watts": watts,
+                                   "metered": metered, "ts": time.time()}))
 
     def actuator(self, name: str, state: str, reco_id: str, ok: bool, source: str):
         """Confirm a physical action back to the hub — closes the actuation loop."""
@@ -174,17 +309,239 @@ class Publisher:
         self.c.disconnect()
 
 
+def _read_watts(dev) -> Optional[float]:
+    """Instantaneous measured power, or None if this device has no meter.
+
+    Uses the Energy module rather than the deprecated `dev.emeter_realtime`,
+    which emits a DeprecationWarning on python-kasa 0.10+ — and that warning
+    would land in the middle of our stdout telemetry stream.
+    """
+    if kasa is None:
+        return None
+    try:
+        energy = dev.modules.get(kasa.Module.Energy)
+        if energy is None:
+            return None
+        w = energy.current_consumption
+        return float(w) if w is not None else None
+    except Exception:
+        return None
+
+
+class KasaBank:
+    """Binds the demo's logical loads to real TP-Link Kasa devices on the LAN.
+
+    This is the physical-action half of Archetype E. A 'lights' command does not
+    light an LED that *represents* a lamp — it switches an actual lamp.
+
+    Resolution order per load, so a changing network never hard-breaks the demo:
+      1. an explicit host/IP from the environment  (KASA_<LOAD>_HOST)
+      2. discovery by device alias                 (KASA_<LOAD>_ALIAS)
+      3. unbound -> the caller falls back to 'simulated' and says so
+
+    Alias resolution matters: venue DHCP will hand out different IPs than the
+    bench did, and the aliases ("Bedroom light 2") travel with the device.
+
+    Several of these devices (HS110 plug, KL120 bulb) expose an energy meter.
+    Where one does, we publish MEASURED watts instead of the modelled table
+    value from hub/energy_model.py — which retires the "load power is modelled,
+    not metered" limitation in code/README.md for those loads.
+    """
+
+    def __init__(self) -> None:
+        self.hosts: Dict[str, str] = {}
+        self.aliases: Dict[str, str] = {}
+        self.devices: Dict[str, object] = {}
+        self.lock = threading.Lock()
+
+        for load in KASA_LOADS:
+            host = os.environ.get(f"KASA_{load.upper()}_HOST", "").strip()
+            alias = os.environ.get(f"KASA_{load.upper()}_ALIAS",
+                                   KASA_DEFAULT_ALIASES.get(load, "")).strip()
+            if host:
+                self.hosts[load] = host
+            if alias:
+                self.aliases[load] = alias
+
+    @property
+    def enabled(self) -> bool:
+        return kasa is not None and bool(self.hosts or self.aliases)
+
+    def _run(self, coro):
+        """Run one coroutine. Commands are rare and serialised by self.lock."""
+        return asyncio.new_event_loop().run_until_complete(coro)
+
+    async def _connect_one(self, host: str):
+        """Direct TCP session to a known host.
+
+        Deliberately NOT Discover.discover_single(), which sends a UDP probe.
+        Two failures made that unusable here, both reproduced on this bench:
+          * the ArtiFi mesh drops client-to-client UDP broadcast, so discovery
+            from the board found nothing while TCP to :9999 worked fine;
+          * a KL120 bulb that is currently switched OFF stops answering UDP
+            discovery altogether — so the very state we most need to verify
+            after switching something off is the one discovery cannot read.
+        TCP works in both cases.
+        """
+        dev = await kasa.Device.connect(host=host)
+        await dev.update()
+        return dev
+
+    async def _resolve(self) -> None:
+        # Explicit hosts first — cheap and deterministic.
+        for load, host in self.hosts.items():
+            if load in self.devices:
+                continue
+            try:
+                self.devices[load] = await self._connect_one(host)
+                print(f"[kasa] {load} -> {host} "
+                      f"({self.devices[load].alias})", flush=True)
+            except Exception as exc:
+                print(f"[kasa] {load}: host {host} unreachable: {exc}", flush=True)
+
+        # Anything still unbound and carrying an alias: fall back to discovery.
+        wanted = {load: a for load, a in self.aliases.items()
+                  if load not in self.devices}
+        if not wanted:
+            return
+        try:
+            found = await kasa.Discover.discover(timeout=KASA_DISCOVER_S)
+        except Exception as exc:
+            print(f"[kasa] discovery failed: {exc}", flush=True)
+            return
+        by_alias = {}
+        for host, dev in found.items():
+            try:
+                await dev.update()
+                by_alias[dev.alias.strip().lower()] = (host, dev)
+            except Exception:
+                continue
+        for load, alias in wanted.items():
+            hit = by_alias.get(alias.strip().lower())
+            if hit:
+                self.devices[load] = hit[1]
+                print(f"[kasa] {load} -> {hit[0]} (alias '{alias}')", flush=True)
+            else:
+                print(f"[kasa] {load}: no device with alias '{alias}' on the LAN",
+                      flush=True)
+
+    def resolve(self) -> None:
+        if not self.enabled:
+            print("[kasa] disabled (python-kasa missing or no devices configured)",
+                  flush=True)
+            return
+        with self.lock:
+            try:
+                self._run(self._resolve())
+            except Exception as exc:
+                print(f"[kasa] resolve error: {exc}", flush=True)
+
+    def switch(self, load: str, action: str):
+        """Switch a real device and READ ITS STATE BACK.
+
+        Returns (ok, source, watts). `ok` reflects what the device reports after
+        the write, not merely that a request was sent — the old serial path
+        returned True for 'bytes were flushed', which is not the same claim.
+        """
+        if not self.enabled or load not in self.devices:
+            return None, "unbound", None
+
+        want_on = (action == "on")
+
+        async def go():
+            """Switch, then decide success by READING THE DEVICE, not by whether
+            the write returned cleanly.
+
+            TP-Link firmware serves one connection at a time, so a concurrent
+            reader (the Kasa phone app, another script, our own poll loop) makes
+            a write raise `Communication error ... transition_light_state` even
+            when the command DID land. Reporting ok=False there is a false
+            negative — the honest answer is whatever state the device is
+            actually in afterwards. So: attempt, then verify, and retry only if
+            the device genuinely is not where we asked it to be.
+            """
+            dev = self.devices[load]
+            last_exc = None
+            for attempt in range(KASA_SWITCH_RETRIES):
+                try:
+                    await (dev.turn_on() if want_on else dev.turn_off())
+                except Exception as exc:
+                    last_exc = exc          # may still have landed — verify below
+                await asyncio.sleep(KASA_SETTLE_S)
+                try:
+                    await dev.update()
+                    if bool(dev.is_on) == want_on:
+                        if last_exc is not None:
+                            print(f"[kasa] {load}: write reported "
+                                  f"'{type(last_exc).__name__}' but the device IS "
+                                  f"{action} — trusting the device", flush=True)
+                        return True, bool(dev.is_on), _read_watts(dev)
+                except Exception as exc:
+                    last_exc = exc
+                await asyncio.sleep(KASA_RETRY_S)
+            # Out of attempts: report the last state we could read, honestly.
+            try:
+                await dev.update()
+                return False, bool(dev.is_on), _read_watts(dev)
+            except Exception:
+                raise last_exc if last_exc else RuntimeError("unreachable")
+
+        with self.lock:
+            try:
+                ok, is_on, watts = self._run(go())
+            except Exception as exc:
+                print(f"[kasa] switch {load} -> {action} failed: {exc}", flush=True)
+                return False, "kasa_error", None
+
+        if not ok:
+            print(f"[kasa] {load} did NOT reach '{action}' after "
+                  f"{KASA_SWITCH_RETRIES} attempts (reports "
+                  f"{'on' if is_on else 'off'})", flush=True)
+        return ok, "kasa", watts
+
+    def poll(self) -> Dict[str, Dict]:
+        """Current state + measured power for every bound load."""
+        if not self.enabled or not self.devices:
+            return {}
+
+        async def go():
+            out = {}
+            for load, dev in self.devices.items():
+                try:
+                    await dev.update()
+                    entry = {"state": "on" if dev.is_on else "off",
+                             "metered": False}
+                    watts = _read_watts(dev)
+                    if watts is not None:
+                        entry["watts"] = watts
+                        entry["metered"] = True
+                    out[load] = entry
+                except Exception:
+                    continue
+            return out
+
+        with self.lock:
+            try:
+                return self._run(go())
+            except Exception as exc:
+                print(f"[kasa] poll error: {exc}", flush=True)
+                return {}
+
+
 class Actuator:
-    """Executes hub commands on the MCU and reports back.
+    """Executes hub commands and reports back.
 
     This is the physical-action half of Archetype E. The hub decides *whether* an
     action is safe (the R7 comfort guardrail gates it there); this class only carries
     the command to the hardware and reports honestly whether it landed.
+
+    Preference order: a real Kasa device -> the MCU over serial -> simulated.
     """
 
-    def __init__(self, pub: "Publisher", serial_handle=None):
+    def __init__(self, pub: "Publisher", serial_handle=None, kasa_bank=None):
         self.pub = pub
         self.serial = serial_handle
+        self.kasa = kasa_bank
         self.pending: "queue.Queue" = queue.Queue()
         self.last_ack: Dict = {}
 
@@ -211,11 +568,24 @@ class Actuator:
             print(f"[uno_q] bad command on {msg.topic}: {exc}", flush=True)
 
     def execute(self, load: str, action: str, reco_id: str) -> bool:
-        """Send the command to the MCU and publish a confirmation."""
+        """Carry the command to real hardware and publish an honest confirmation."""
         ok = False
         source = "none"
+        measured_w = None
 
-        if self.serial is not None:
+        # 1. A real Kasa device, if this load is bound to one. Preferred, because
+        #    it is the only path that can report what the hardware actually did.
+        if self.kasa is not None:
+            k_ok, k_source, k_watts = self.kasa.switch(load, action)
+            if k_source != "unbound":
+                ok, source, measured_w = bool(k_ok), k_source, k_watts
+                print(f"[uno_q] KASA {load} -> {action} ok={ok}"
+                      + (f" measured={measured_w:.1f}W" if measured_w is not None else ""),
+                      flush=True)
+
+        # 2. The MCU over serial. Note this only ever proves bytes were flushed —
+        #    the MCU's ack comes back asynchronously and is not awaited here.
+        if source == "none" and self.serial is not None:
             try:
                 line = f"CMD {load} {action}\n".encode("ascii")
                 self.serial.write(line)
@@ -225,14 +595,17 @@ class Actuator:
             except Exception as exc:
                 print(f"[uno_q] serial write failed: {exc}", flush=True)
                 source = "serial_error"
-        else:
-            # No MCU attached (development / fake-serial mode). Be explicit rather
-            # than silently claiming a physical action occurred.
+
+        # 3. Nothing attached. Be explicit rather than silently claiming a
+        #    physical action occurred.
+        if source == "none":
             ok, source = True, "simulated"
             print(f"[uno_q] SIMULATED actuation {load} -> {action} "
-                  f"(no MCU attached)", flush=True)
+                  f"(no Kasa device bound, no MCU attached)", flush=True)
 
         # Reflect the new load state so the hub's power figures follow reality.
+        # A metered device (HS110 plug, KL120 bulb) reports what it is ACTUALLY
+        # drawing; only fall back to the modelled table value when it cannot.
         loads = read_loads()
         if load in loads:
             loads[load]["state"] = action
@@ -241,8 +614,11 @@ class Actuator:
                     json.dump(loads, f)
             except Exception:
                 pass
-            watts = float(loads[load].get("watts", 0)) if action == "on" else 0.0
-            self.pub.load(load, action, watts)
+            if measured_w is not None:
+                watts = measured_w
+            else:
+                watts = float(loads[load].get("watts", 0)) if action == "on" else 0.0
+            self.pub.load(load, action, watts, metered=measured_w is not None)
 
         self.pub.actuator(load, action, reco_id, ok, source)
         return ok
@@ -304,28 +680,48 @@ def main():
     print(f"[uno_q] room={ROOM} broker={args.broker}:{args.port} "
           f"fake={args.fake_serial}", flush=True)
 
-    # One serial handle, shared: telemetry is read from it, commands are written to it.
+    # Telemetry source, in order of preference:
+    #   1. --fake-serial            explicit, no hardware needed
+    #   2. Arduino Router monitor   the UNO Q path (MCU Serial over RPMsg -> tcp/7500)
+    #   3. /dev/ttyACM*             classic Arduino over USB CDC
+    #   4. fake                     honest fallback so the demo still runs
+    #
+    # `handle` is the *writable* serial link. It stays None on the UNO Q path
+    # because the router monitor is read-only from here, which is why actuation
+    # lives on the network (Kasa) rather than behind a CMD write to the MCU.
     handle = None
-    if args.fake_serial or serial is None:
-        if serial is None and not args.fake_serial:
-            print("[uno_q] pyserial missing — falling back to fake data", flush=True)
+    if args.fake_serial:
         source = fake_lines()
+    elif mcu_tcp_available():
+        source = tcp_lines()
     else:
         port = find_port()
         if port is None:
-            print("[uno_q] no MCU serial port found — falling back to fake data", flush=True)
+            print("[uno_q] no MCU found (no router socket on "
+                  f"tcp://{MCU_TCP_HOST}:{MCU_TCP_PORT}, no /dev/ttyACM*) — "
+                  "falling back to fake data", flush=True)
             source = fake_lines()
         else:
             handle = serial.Serial(port, BAUD, timeout=2)
             source = serial_lines(handle)
 
+    # Bind logical loads to real Kasa devices before announcing readiness, so the
+    # startup line tells the truth about what can actually be switched.
+    bank = KasaBank()
+    bank.resolve()
+
     pub = Publisher(args.broker, args.port)
 
     # Subscribe to hub commands so the loop can close: reco -> approve -> actuate.
-    actuator = Actuator(pub, handle)
+    actuator = Actuator(pub, handle, bank)
     pub.subscribe("home/command/#", actuator.on_command)
-    print(f"[uno_q] command listener ready "
-          f"(actuator source: {'mcu_serial' if handle else 'simulated'})", flush=True)
+
+    if bank.devices:
+        bound = ", ".join(f"{k}={v.alias}" for k, v in sorted(bank.devices.items()))
+        print(f"[uno_q] command listener ready (actuator: kasa -> {bound})", flush=True)
+    else:
+        print(f"[uno_q] command listener ready "
+              f"(actuator source: {'mcu_serial' if handle else 'simulated'})", flush=True)
 
     lux_s, temp_s, hum_s = Smoother(), Smoother(), Smoother()
     occ_fsm = OccupancyFSM()
@@ -334,6 +730,7 @@ def main():
     last: Dict[str, float] = {}
     parsed_n = dropped_n = 0
     last_loads: Dict[str, str] = {}
+    last_kasa_poll = 0.0
 
     try:
         for line in source:
@@ -360,39 +757,94 @@ def main():
                 continue
 
             # --- edge processing ---
-            lux = lux_s.push(float(raw.get("lux", 0)))
-            temp = temp_s.push(float(raw.get("temp_c", 0.0)))
-            hum = hum_s.push(float(raw.get("humidity", 0.0)))
-            occ = occ_fsm.push(bool(raw.get("occupancy", False)))
+            # Only signals the MCU actually reported. The Modulino sketch emits
+            # a PARTIAL payload (just what it has a source for) so the phone
+            # simulator can own the rest; the hub merges room state with
+            # {**prev, **payload}. Defaulting a missing key to 0 here would
+            # republish that zero at 1 Hz and stomp on the phone's values.
+            # MCU_SIGNALS gates which of these the MCU is allowed to own — see the
+            # comment on that constant. Without it, the 1 Hz stream silently wins
+            # every race against a value POSTed to /api/sensor.
+            present: Dict[str, object] = {}
+            if "lux" in raw and "lux" in MCU_SIGNALS:
+                present["lux"] = int(lux_s.push(float(raw["lux"])))
+            if "temp_c" in raw and "temp_c" in MCU_SIGNALS:
+                present["temp_c"] = round(temp_s.push(float(raw["temp_c"])), 1)
+            if "humidity" in raw and "humidity" in MCU_SIGNALS:
+                present["humidity"] = round(hum_s.push(float(raw["humidity"])), 1)
+            if "occupancy" in raw and "occupancy" in MCU_SIGNALS:
+                present["occupancy"] = occ_fsm.push(bool(raw["occupancy"]))
 
             now = time.time()
-            material = (
-                not last
-                or occ != last.get("occupancy")
-                or abs(temp - last.get("temp_c", 0)) >= TEMP_CHANGE_C
-                or abs(lux - last.get("lux", 0)) >= max(LUX_CHANGE_PCT * max(last.get("lux", 1), 1), 10)
-            )
+
+            # NOTE: sensor publishing is guarded by `if present`, but load
+            # publishing below it must NOT be. Loads come from the Kasa devices,
+            # not from this telemetry line — an early `continue` here (e.g. when
+            # MCU_SIGNALS is empty and every line is provenance-only) silently
+            # stopped every load from ever reaching the hub, which left the rules
+            # engine with nothing to fire on. Keep the two independent.
+            material = bool(present) and not last
+            for k, v in present.items():
+                if k not in last:
+                    material = True                       # first sight of this signal
+                elif k == "occupancy":
+                    material = material or v != last[k]
+                elif k == "temp_c":
+                    material = material or abs(v - last[k]) >= TEMP_CHANGE_C
+                elif k == "lux":
+                    material = material or abs(v - last[k]) >= max(
+                        LUX_CHANGE_PCT * max(last[k], 1), 10)
+                # humidity alone is deliberately not a publish trigger; it rides
+                # along on the next material change or the heartbeat.
             heartbeat = (now - last_pub) >= HEARTBEAT_S
 
-            if material or heartbeat:
-                payload = {"occupancy": occ, "lux": int(lux),
-                           "temp_c": round(temp, 1), "humidity": round(hum, 1),
-                           "ts": now}
+            if present and (material or heartbeat):
+                payload = dict(present)
+                payload["ts"] = now
+                # Carry provenance through so the dashboard and any audit can
+                # tell a measurement from a declared simulation.
+                for pk in ("temp_src", "hum_src", "lux_src", "occ_src"):
+                    if pk in raw:
+                        payload[pk] = raw[pk]
                 pub.sensors(payload)
-                last = payload
+                last.update(present)
                 last_pub = now
                 why = "change" if material else "heartbeat"
-                print(f"[uno_q] pub ({why}) occ={occ} lux={int(lux)} "
-                      f"{temp:.1f}C {hum:.0f}%", flush=True)
+                shown = " ".join(f"{k}={present[k]}" for k in sorted(present))
+                print(f"[uno_q] pub ({why}) {shown}", flush=True)
 
-            # --- load state from the local control file ---
+            # --- real load state + MEASURED power from the Kasa devices ---
+            # Ground truth beats the modelled table: if someone switches the lamp
+            # by hand, the hub still sees it, and metered loads report the watts
+            # they are genuinely drawing.
+            if bank.devices and (now - last_kasa_poll) >= KASA_POLL_S:
+                last_kasa_poll = now
+                for name, info in bank.poll().items():
+                    state = info["state"]
+                    watts = info.get("watts")
+                    changed = last_loads.get(name) != state
+                    if changed or info.get("metered"):
+                        if watts is None:
+                            spec = read_loads().get(name, {})
+                            watts = float(spec.get("watts", 0)) if state == "on" else 0.0
+                        pub.load(name, state, round(float(watts), 1),
+                                 metered=bool(info.get("metered")))
+                        if changed:
+                            tag = "metered" if info.get("metered") else "modelled"
+                            print(f"[uno_q] load {name} -> {state} "
+                                  f"({watts:.1f}W {tag})", flush=True)
+                        last_loads[name] = state
+
+            # --- loads with no Kasa binding, driven by the local control file ---
             loads = read_loads()
             for name, spec in loads.items():
+                if name in bank.devices:
+                    continue          # a real device owns this one
                 state = spec.get("state", "off")
                 if last_loads.get(name) != state:
                     pub.load(name, state, float(spec.get("watts", 0)) if state == "on" else 0.0)
                     last_loads[name] = state
-                    print(f"[uno_q] load {name} -> {state}", flush=True)
+                    print(f"[uno_q] load {name} -> {state} (modelled)", flush=True)
     finally:
         print(f"[uno_q] parsed={parsed_n} dropped={dropped_n}", flush=True)
         pub.close()

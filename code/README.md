@@ -126,10 +126,10 @@ Measured on a Windows-on-Arm dev machine with `LLM_ENABLED=0` (deterministic pat
 | Energy-model estimate | 0.004 | 0.007 | ms | pure arithmetic + formula string |
 | Rules engine (7 rules) | 0.027 | 0.046 | ms | 1 room / 3 loads -> 2 findings |
 | Narration - deterministic template | 0.002 | 0.005 | ms | control path; no model, no network |
-| Narration - local LLM (GenieX) | *fill in* | *fill in* | ms | run with `geniex serve` active |
-| Sensor snapshot -> recommendations | 0.035 | 0.058 | ms | rules + energy model + narration |
+| Narration - local LLM (GenieX) | 3110.2 | 3272.7 | ms | run with `geniex serve` active, model `qualcomm/Qwen3-4B-Instruct-2507` (W4A16) |
+| Sensor snapshot -> recommendations | 0.017 | 0.019 | ms | rules + energy model + narration |
 | **Broker messages avoided by edge filtering** | **88.7** | - | **%** | 68 published of 600 sampled (10 min @ 1 Hz) |
-| Peak RSS | 32.9 | - | MB | hub reasoning stack loaded |
+| Peak RSS | 34.0 | - | MB | hub reasoning stack loaded |
 
 **The reasoning tier costs microseconds.** All the latency that matters is LLM
 inference, which is why it is the only part we accelerate on the NPU - and why the
@@ -139,10 +139,29 @@ deterministic fallback is instant when the model is unavailable.
 publishes on a material change (lux +/-15%, temp +/-0.3 C, occupancy transition) or a
 10 s heartbeat.
 
-> **To fill in the NPU row:** start `geniex serve`, then
-> `LLM_BASE_URL=http://127.0.0.1:18181/v1 python hub/benchmark.py --markdown`.
-> For authoritative NPU latency/power/utilization, run `/quad-profile` via the QUAD MCP
-> server and paste its report below this table.
+**NPU row above is real, measured evidence**: `geniex serve` running the `qairt` (W4A16, NPU-only) runtime
+on this machine's actual Hexagon NPU — this is the app's real production narration path, not a synthetic
+benchmark.
+
+> **`/quad-profile` / `/quad-orchestrate` on a separate demo model — currently blocked, documented honestly.**
+> We attempted a supplementary CPU/GPU/NPU allocation comparison via QUAD's `convert_model` +
+> `orchestrate_workload` on a small sample ONNX model (unrelated to this app's own AI path). Two independent
+> server-side infrastructure failures on the hosted QUAD MCP server blocked it:
+> 1. `qairt-converter` (QNN/SNPE target) fails to even import — `ImportError: libpython3.10.so.1.0: cannot
+>    open shared object file` — a broken Python env on the server, not something fixable client-side.
+> 2. The ExecuTorch target fails with `No ExecuTorch checkout or installed package found` — the toolchain
+>    isn't fetched on the server (`bash scripts/sdk_fetch.sh executorch` was never run there).
+>
+> Also worth noting: the hosted MCP server itself (`quad.infra.foundries.io`) is a virtualized x86_64 Ubuntu
+> host (`AMD EPYC 7B12`, `available_runtimes: ["cpu"]` only) — even if conversion had succeeded, profiling
+> directly against it would **not** produce real NPU numbers. Real on-device profiling needs the client-side
+> `quad-client profile-device --transport ssh --host <board-ip>` path (server plans, your machine executes on
+> hardware it can reach) — see `/quad-detect`'s findings on this repo's UNO Q board for why that path isn't
+> populated with NPU numbers yet either (no SNPE/fastrpc installed on-device).
+>
+> Flag this at a QUAD office-hours session (Tue/Thu 1:30-3:30, Fri 9-noon) if you want the `/quad-profile`
+> evidence filled in before submission — the GenieX row above already satisfies "real NPU numbers" for the
+> app's actual AI path in the meantime.
 
 ## Rules implemented
 
@@ -161,27 +180,77 @@ would make the home uncomfortable, and it blocks the actuator from carrying them
 
 ## Hardware
 
-- Copilot+ PC, Snapdragon X Series (hub)
-- Arduino UNO Q + PIR motion sensor, photoresistor, DHT22, **micro-servo or relay**
-- Samsung Galaxy S25 (or any phone with a modern browser)
-- Qualcomm AI Cloud 100 (optional)
+Breadboard-free. Everything connects over Qwiic or Wi-Fi.
 
-**The simulator replaces all sensor hardware.** Every feature except the physical servo
-movement can be demonstrated with nothing but the PC.
+| Piece | What it is | Role |
+|---|---|---|
+| Copilot+ PC, Snapdragon X Elite | 45 TOPS Hexagon NPU | hub: rules, energy model, GenieX LLM narration, safety gate |
+| Arduino UNO Q | Dragonwing QRB2210 + STM32U585 | edge node: reads sensors, drives the actuator |
+| **Modulino Knob** | Qwiic, I2C `0x3A` on `Wire1` | **declared simulated thermostat dial** — turn past 27 °C to make R7 refuse |
+| **TP-Link Kasa KL120 bulb** | LAN, port 9999 | the `lights` load — **and it meters its own watts** |
+| **TP-Link Kasa HS110 plug** | LAN, port 9999 | the `ac` load — **also metered** |
+| Any phone or laptop browser | — | the sensor simulator at `/simulator`, and the approve UI at `/phone` |
+
+Optional, auto-detected if present: Modulino **Thermo** (real temp + humidity, takes over
+from the Knob), **Light** (real lux), **Distance** (presence), **Buttons**, **Buzzer**,
+**Pixels**. The firmware probes for each at boot; a missing node degrades exactly one
+signal and never blocks startup.
+
+**Nothing here is soldered, and no breadboard is required.** The Modulino attaches by a
+single Qwiic cable; the Kasa devices are ordinary smart plugs/bulbs on the LAN.
+
+### Load power is measured, not modelled
+
+The KL120 and HS110 report **real instantaneous watts**, so `home/loads/...` carries
+`"metered": true` and the savings arithmetic runs on measured power rather than a
+published typical value. Loads with no metered device fall back to the table in
+`hub/energy_model.py` and are marked `"metered": false`, so the two are never confused.
+
+### Where each signal comes from
+
+Every value is stamped with its source, so a simulated reading can never be mistaken for
+a measurement:
+
+| Signal | Source | Stamp |
+|---|---|---|
+| `temp_c` | Modulino Knob (or Thermo if attached) | `temp_src: knob_sim` / `hs3003` |
+| `lux`, `humidity`, `occupancy` | phone simulator (or Light/Distance nodes) | `lux_src`, `hum_src`, `occ_src` |
+| `presence` | phone geofence or manual toggle | — |
+| load watts | Kasa device meter | `metered: true` |
+
+Because the hub merges room state, the **last writer of a key wins** — so
+`MCU_SIGNALS` in `arduino/board.env` declares explicitly which signals the board owns
+(default `temp_c`) and leaves the rest to the simulator. Set it empty to run entirely
+hands-free from the simulator.
 
 ## Setup
 
-### Quickstart, no hardware — 3 commands
+### Quickstart, no hardware — 2 commands
 
 ```bash
-pip install -r requirements.txt
-python hub/server.py                      # terminal 1
-python hub/simulator.py --mode demo       # terminal 2
+pip install --only-binary=:all: -r requirements.txt   # --only-binary matters on Win-ARM
+python hub/server.py
 ```
 
-Open `http://localhost:8000/`. (The broker is optional for this path; the simulator
-needs it, so start `mosquitto -c mosquitto.conf -v` first if you want the scripted
-scenario. Without a broker, drive the hub over REST — see below.)
+Then open two pages:
+
+| Page | What it is |
+|---|---|
+| `http://localhost:8000/` | the dashboard — findings, savings, Apply buttons |
+| `http://localhost:8000/simulator` | **the sensor simulator** — sliders for lux/temp/humidity, occupancy and presence toggles, load switches, and one-tap demo presets |
+
+The simulator drives the same `/api/sensor`, `/api/load` and `/api/presence` endpoints a
+real sensor would, so the rules engine cannot tell the difference — which is exactly why
+values it sends stay labelled as simulated wherever they surface. It needs no broker and
+no hardware. Open it from a phone at `http://<PC_IP>:8000/simulator`.
+
+For the original scripted 90-second narrative instead, start the broker and run the
+scenario player:
+
+```bash
+mosquitto -c mosquitto.conf -v            # terminal 1
+python hub/simulator.py --mode demo       # terminal 2
+```
 
 ### Full setup
 
@@ -250,38 +319,73 @@ python hub/server.py
 
 It prints the LAN URL to use from other devices.
 
-**5. Arduino UNO Q — sensors and actuator**
+**5. Kasa smart devices — the physical actuator**
 
-Flash `arduino/sketch/sketch.ino` to the STM32 side (App Lab targets both brains; the
-Arduino IDE/CLI programs the MCU only). Confirm one JSON line per second at 115200 baud.
-Then on the Dragonwing Linux side:
+Any TP-Link Kasa plug or bulb on the same LAN. Controlled **locally over port 9999** —
+no cloud account, no API token, no credentials of any kind. Find yours:
 
 ```bash
-pip3 install paho-mqtt pyserial
-ROOM=living MQTT_HOST=<PC_IP> python3 uno_q_publisher.py
+.venv/Scripts/kasa.exe discover        # prints alias, IP, model, and whether it meters
 ```
 
-This publishes sensor data **and subscribes to `home/command/#`** so approved
-recommendations reach the actuator.
+> **Windows on ARM:** install deps with `pip install --only-binary=:all: -r requirements.txt`.
+> `python-kasa` pulls `cryptography`, whose newest release has no `win_arm64` wheel and
+> otherwise tries to build from Rust + OpenSSL source and fails. `--only-binary` makes pip
+> resolve back to a version that ships one.
 
-Without hardware: `python3 uno_q_publisher.py --fake-serial`
-Without the Linux side: `python arduino/bridge.py --port COM5` (runs on the PC over USB)
+**6. Arduino UNO Q — Modulino sensing**
 
-Wiring:
+Attach a **Modulino** node to the Qwiic connector. On the UNO Q that connector is the
+**secondary I2C bus (`Wire1`, MCU pins PD12/PD13)** — not the default `Wire`. Confirm what
+is attached before writing any application code:
 
-| Function | Pin |
-|---|---|
-| PIR motion out | D2 |
-| LDR divider (10k to GND) | A0 |
-| DHT22 data | D4 |
-| Servo signal | D9 |
-| Relay / LED | D7 |
-| Buzzer | D8 |
+```bash
+# on the board (or over `adb shell`), flash the scanner and read the monitor
+arduino-cli compile --fqbn arduino:zephyr:unoq arduino/scanner
+arduino-cli upload  --fqbn arduino:zephyr:unoq arduino/scanner
+```
 
-> Power the servo from its own 5 V supply, not the board's 3V3 rail — a stalling servo
-> browns out the MCU. Tune `SERVO_OFF_DEG` / `SERVO_ON_DEG` so the arm reaches the switch
-> without pressing hard against it. If no servo is attached, the relay and buzzer still
-> confirm the command landed, and the confirmation reports `source` honestly.
+Expect at least one address under `Wire1` — a Knob answers at `0x3A`. Then flash the real
+firmware and start the publisher:
+
+```bash
+arduino-cli compile --fqbn arduino:zephyr:unoq arduino/sketch
+arduino-cli upload  --fqbn arduino:zephyr:unoq arduino/sketch
+
+cp arduino/board.env.example arduino/board.env    # edit IPs/aliases for your LAN
+cd arduino && set -a && . ./board.env && set +a
+python3 uno_q_publisher.py
+```
+
+Expect `[kasa] lights -> …`, `MQTT connected`, and **`subscribed home/command/#`** — that
+last line is what makes approvals reach the actuator; if it is missing, actuation is dead.
+
+Three UNO Q specifics that will cost you an afternoon if you do not know them:
+
+- **`Serial` needs the `Arduino_RouterBridge` library.** The board platform ships a stub
+  header that hard-errors with "Please install the Arduino_RouterBridge library" until you
+  do. It pulls `Arduino_RPClite` → `MsgPack` → `ArxContainer`/`ArxTypeTraits`/`DebugLog`.
+- **The MCU's `Serial` is NOT a `/dev/ttyACM*` device.** It travels over RPMsg to the
+  `arduino-router` service, which republishes it on **`tcp://127.0.0.1:7500`**. That is what
+  `uno_q_publisher.py` reads; it falls back to `/dev/ttyACM*` for classic Arduino boards.
+- **Board platform must be ≥ 0.55.0** for `Serial` support at all (and for the
+  `ARDUINO_UNO_Q` define that points the Modulino library at `Wire1`).
+
+No hardware at all: `python3 uno_q_publisher.py --fake-serial`.
+No board, PC-attached MCU only: `python arduino/bridge.py --port COM5`.
+
+**6b. USB-only fallback (no Wi-Fi for the board)**
+
+The UNO Q exposes an **ADB interface over USB-C**, so the whole thing works with no
+wireless at all — useful when venue Wi-Fi is hostile:
+
+```bash
+adb shell                              # a shell on the Dragonwing Linux side
+adb reverse tcp:1883 tcp:1883          # board reaches the PC broker at 127.0.0.1:1883
+```
+
+Kasa devices still need the LAN, so in USB-only mode actuation degrades to `simulated`
+and reports itself as such rather than pretending.
 
 **6. Phone**
 
@@ -361,6 +465,23 @@ python smoke_test.py
 32 checks covering arithmetic, every rule, the comfort guardrail (as both a filter and
 an actuation gate), LLM fallback, cloud fallback, the live server, and the full
 approve → command → realized-saving loop. Exits non-zero on failure.
+
+> **Run it with nothing else live.** `smoke_test.py` starts its own hub and sets up its
+> own fixtures, so a running instance of the system will make it fail in confusing ways:
+>
+> - **A live `uno_q_publisher.py`** keeps publishing real load state to the same broker.
+>   The test's hub ingests it and the fixtures get overwritten — seen as
+>   `total watts computed 10.8 W` (that 10.8 W was a real smart bulb).
+> - **Another `hub/server.py`** connects with the same MQTT client id
+>   (`hub-orchestrator`), and the broker evicts whichever connected first. It also
+>   already holds port 8000, so the test ends up reading the *other* hub's state.
+>
+> Stop both first:
+> ```bash
+> adb shell "pkill -f uno_q_publisher.py"     # board publisher
+> # and stop any hub/server.py you started
+> ```
+> This is the same "one process per client id" rule that applies to the demo itself.
 
 ### Measure performance
 

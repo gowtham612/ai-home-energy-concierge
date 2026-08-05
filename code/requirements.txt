@@ -4,3 +4,19 @@ websockets>=12.0
 paho-mqtt>=1.6
 requests>=2.31
 pyserial>=3.5
+
+# Real physical actuation: TP-Link Kasa smart plugs and bulbs, controlled
+# locally over the LAN (port 9999) — no cloud account, no API token.
+# Soft dependency: uno_q_publisher.py degrades to "simulated" actuation and
+# says so if this is missing, so the sensing half always runs.
+#
+# NOTE for Windows on ARM (Snapdragon X Elite): install with
+#     pip install --only-binary=:all: -r requirements.txt
+# python-kasa pulls `cryptography`, whose newest release has no win_arm64
+# wheel and otherwise tries to build from Rust+OpenSSL source and fails.
+# --only-binary makes pip resolve back to a version that ships one (46.0.3).
+python-kasa>=0.10
+
+# Optional: live RSS/CPU sampling in hub/benchmark.py. Without it the
+# benchmark still runs and simply reports Peak RSS as unavailable.
+psutil>=5.9

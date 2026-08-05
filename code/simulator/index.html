@@ -1,0 +1,754 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Sensor Simulator — Home Energy Assistant</title>
+<style>
+  /* ============ tokens ============ */
+  :root{
+    --ink:        #0d1219;   /* page background */
+    --panel:      #151c26;   /* card background */
+    --panel-2:    #1b2431;   /* nested surfaces */
+    --line:       #26303f;
+    --text:       #e9edf2;
+    --muted:      #8b98a9;
+    --sim:        #4fd6c4;   /* simulated-input accent (teal) */
+    --sim-dim:    #1d4a45;
+    --amber:      #f2a33c;   /* R7 refusal / caution */
+    --amber-bg:   #3a2a10;
+    --ok:         #55c17a;
+    --crit:       #ef5f6b;
+    --serious:    #f2833c;
+    --warn:       #e8c545;
+    --info:       #5aa7e8;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    --radius: 10px;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0}
+  body{
+    background:var(--ink); color:var(--text);
+    font:15px/1.5 var(--sans);
+    padding: 14px clamp(10px, 3vw, 28px) 60px;
+  }
+  a{color:var(--sim)}
+  button{font:inherit; cursor:pointer}
+  :focus-visible{outline:2px solid var(--sim); outline-offset:2px; border-radius:4px}
+  @media (prefers-reduced-motion: reduce){ *{transition:none !important; animation:none !important} }
+
+  /* ============ header ============ */
+  header{display:flex; flex-wrap:wrap; gap:10px 18px; align-items:baseline; margin-bottom:14px}
+  h1{font:600 19px/1.2 var(--sans); margin:0; letter-spacing:.2px}
+  .sim-badge{
+    font:700 10px/1 var(--mono); letter-spacing:.14em; color:var(--ink);
+    background:var(--sim); padding:4px 7px; border-radius:4px; vertical-align:2px;
+  }
+  .tagline{color:var(--muted); font-size:13px}
+  .conn{margin-left:auto; display:flex; align-items:center; gap:8px; font:12px var(--mono); color:var(--muted)}
+  .dot{width:9px;height:9px;border-radius:50%;background:var(--crit); display:inline-block}
+  .dot.ok{background:var(--ok)} .dot.poll{background:var(--warn)}
+  .hub-row{display:flex; gap:8px; align-items:center; width:100%; margin-top:2px}
+  .hub-row input{
+    flex:1; max-width:420px; background:var(--panel); border:1px solid var(--line);
+    color:var(--text); font:13px var(--mono); padding:7px 10px; border-radius:8px;
+  }
+  .hub-row button{background:var(--panel-2); border:1px solid var(--line); color:var(--text);
+    padding:7px 12px; border-radius:8px}
+  #connBanner{display:none; margin:0 0 12px; padding:11px 14px; border-radius:var(--radius);
+    font-size:13.5px; background:var(--panel); border:1px solid var(--line); color:var(--muted)}
+  #connBanner.warn{display:block; background:var(--amber-bg); border-color:var(--amber); color:var(--text)}
+  #connBanner.info{display:block}
+
+  /* ============ presets ============ */
+  .presets{display:flex; gap:8px; overflow-x:auto; padding:2px 0 12px; -webkit-overflow-scrolling:touch}
+  .preset{
+    flex:0 0 auto; background:var(--panel); border:1px solid var(--line); color:var(--text);
+    border-radius:999px; padding:8px 14px; font-size:13px; white-space:nowrap;
+  }
+  .preset b{color:var(--sim); font-weight:600}
+  .preset.danger b{color:var(--amber)}
+  .preset:active{transform:translateY(1px)}
+
+  /* ============ layout ============ */
+  .grid{display:grid; grid-template-columns: minmax(320px,460px) 1fr; gap:16px}
+  @media (max-width: 880px){ .grid{grid-template-columns:1fr} }
+  .card{background:var(--panel); border:1px solid var(--line); border-radius:var(--radius); padding:16px}
+  .card h2{
+    margin:0 0 4px; font:700 11px/1 var(--mono); letter-spacing:.16em; color:var(--muted);
+    text-transform:uppercase;
+  }
+  .card .sub{color:var(--muted); font-size:12.5px; margin:0 0 14px}
+
+  /* ============ controls ============ */
+  .ctl{margin:18px 0}
+  .ctl-head{display:flex; align-items:baseline; gap:8px; margin-bottom:6px}
+  .ctl-head label{font-weight:600; font-size:14px}
+  .tag{font:600 9.5px/1 var(--mono); letter-spacing:.1em; padding:3px 5px; border-radius:3px;
+       color:var(--sim); border:1px solid var(--sim-dim); background:rgba(79,214,196,.06)}
+  .val{margin-left:auto; font:600 15px var(--mono); color:var(--sim); font-variant-numeric:tabular-nums}
+  .val.hot{color:var(--amber)}
+
+  /* slider with threshold annotations — signature element */
+  .slider-wrap{position:relative; padding:6px 0 20px}
+  input[type=range]{
+    -webkit-appearance:none; appearance:none; width:100%; height:26px; background:transparent; margin:0;
+  }
+  input[type=range]::-webkit-slider-runnable-track{height:6px; border-radius:3px; background:var(--track, var(--panel-2))}
+  input[type=range]::-moz-range-track{height:6px; border-radius:3px; background:var(--track, var(--panel-2))}
+  input[type=range]::-webkit-slider-thumb{
+    -webkit-appearance:none; width:22px; height:22px; margin-top:-8px; border-radius:50%;
+    background:var(--text); border:3px solid var(--sim); box-shadow:0 1px 4px rgba(0,0,0,.5);
+  }
+  input[type=range]::-moz-range-thumb{
+    width:16px; height:16px; border-radius:50%;
+    background:var(--text); border:3px solid var(--sim); box-shadow:0 1px 4px rgba(0,0,0,.5);
+  }
+  .ticks{position:absolute; left:0; right:0; top:26px; height:16px; pointer-events:none}
+  .tick{position:absolute; transform:translateX(-50%); font:600 9.5px var(--mono); color:var(--muted); white-space:nowrap}
+  .tick::before{content:""; display:block; width:1px; height:5px; background:var(--muted); margin:0 auto 2px}
+  .tick.rule{color:var(--amber)} .tick.rule::before{background:var(--amber)}
+
+  .snap-row{display:flex; gap:8px; margin-top:2px}
+  .snap{background:var(--panel-2); border:1px solid var(--line); color:var(--text);
+        font:12.5px var(--mono); padding:6px 10px; border-radius:8px}
+  .snap:hover{border-color:var(--sim)}
+
+  /* toggles */
+  .tog-row{display:flex; align-items:center; gap:10px}
+  .seg{display:flex; border:1px solid var(--line); border-radius:8px; overflow:hidden}
+  .seg button{background:var(--panel-2); color:var(--muted); border:0; padding:8px 16px; font-size:13.5px}
+  .seg button.on{background:var(--sim); color:var(--ink); font-weight:700}
+  .hold{margin-left:auto; font:11.5px var(--mono); color:var(--muted)}
+
+  /* loads */
+  .load-row{display:flex; align-items:center; gap:10px; padding:9px 0; border-top:1px dashed var(--line)}
+  .load-row:first-of-type{border-top:0}
+  .load-name{font-weight:600; min-width:64px}
+  .watts{width:78px; background:var(--panel-2); border:1px solid var(--line); color:var(--text);
+         font:13px var(--mono); padding:6px 8px; border-radius:7px; text-align:right}
+  .load-real{margin-left:auto; font:10.5px var(--mono); color:var(--muted)}
+  .load-real b{color:var(--text); font-weight:600}
+
+  .auto-row{display:flex; align-items:center; gap:10px; margin-top:16px; padding-top:12px;
+            border-top:1px solid var(--line); font-size:13px; color:var(--muted)}
+  .auto-row input{accent-color:var(--sim); width:17px; height:17px}
+
+  /* ============ decisions panel ============ */
+  .refusal{
+    display:none; background:var(--amber-bg); border:1px solid var(--amber); color:var(--text);
+    border-radius:var(--radius); padding:12px 14px; margin-bottom:12px;
+  }
+  .refusal.show{display:block}
+  .refusal .rt{font:700 11px/1 var(--mono); letter-spacing:.14em; color:var(--amber); margin-bottom:6px}
+  .refusal .rr{font:13px var(--mono); white-space:pre-wrap}
+
+  .reco{border:1px solid var(--line); border-left:4px solid var(--info); border-radius:8px;
+        background:var(--panel-2); padding:12px 14px; margin-bottom:10px}
+  .reco.critical{border-left-color:var(--crit)}
+  .reco.serious{border-left-color:var(--serious)}
+  .reco.warning{border-left-color:var(--warn)}
+  .reco-top{display:flex; gap:8px; align-items:baseline; flex-wrap:wrap}
+  .sev{font:700 9.5px/1 var(--mono); letter-spacing:.12em; text-transform:uppercase; padding:3px 6px; border-radius:3px; color:var(--ink)}
+  .sev.critical{background:var(--crit)} .sev.serious{background:var(--serious)}
+  .sev.warning{background:var(--warn)} .sev.info{background:var(--info)}
+  .reco-title{font-weight:650; font-size:14.5px}
+  .reco-body{color:var(--muted); font-size:13px; margin:6px 0 8px}
+  .reco-stats{font:12px var(--mono); color:var(--text); display:flex; gap:14px; flex-wrap:wrap}
+  .reco-stats span b{color:var(--sim)}
+  details.formula{margin-top:8px}
+  details.formula summary{font:11px var(--mono); color:var(--muted); cursor:pointer; letter-spacing:.06em}
+  details.formula pre{
+    margin:6px 0 0; font:11.5px/1.6 var(--mono); color:var(--text);
+    background:var(--ink); border:1px solid var(--line); border-radius:6px; padding:8px 10px;
+    overflow-x:auto; white-space:pre-wrap;
+  }
+  .actions{display:flex; gap:8px; margin-top:10px; flex-wrap:wrap}
+  .apply{background:var(--sim); color:var(--ink); font-weight:700; border:0;
+         padding:8px 16px; border-radius:8px; font-size:13.5px}
+  .apply.off{background:var(--amber)}
+  .apply:disabled{opacity:.45; cursor:default}
+
+  .empty{color:var(--muted); font-size:13px; padding:18px 0; text-align:center}
+  .kv{display:flex; gap:14px; flex-wrap:wrap; font:12px var(--mono); color:var(--muted); margin-top:14px;
+      padding-top:12px; border-top:1px solid var(--line)}
+  .kv b{color:var(--text); font-weight:600}
+
+  /* log */
+  .log{margin-top:16px}
+  .log h2{margin-bottom:8px}
+  #log{font:11px/1.7 var(--mono); color:var(--muted); background:var(--ink); border:1px solid var(--line);
+       border-radius:8px; padding:8px 10px; max-height:150px; overflow-y:auto; white-space:pre-wrap}
+  #log .err{color:var(--crit)} #log .amb{color:var(--amber)} #log .okc{color:var(--ok)}
+
+  footer{margin-top:22px; color:var(--muted); font-size:11.5px; text-align:center}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Sensor Simulator <span class="sim-badge">SIMULATION</span></h1>
+  <span class="tagline">Simulated inputs · real rules · real devices. Nothing here pretends to be a measurement.</span>
+  <span class="conn"><span class="dot" id="connDot"></span><span id="connTxt">disconnected</span></span>
+  <div class="hub-row">
+    <input id="hubUrl" placeholder="http://&lt;PC_IP&gt;:8000  (blank = this server)" autocomplete="off" spellcheck="false">
+    <button id="connectBtn">Connect</button>
+  </div>
+</header>
+
+<div id="connBanner" role="status"></div>
+
+<!-- one-tap demo presets -->
+<div class="presets" role="toolbar" aria-label="Demo presets">
+  <button class="preset danger" data-preset="r2">Away with A/C on → <b>R2 critical</b></button>
+  <button class="preset danger" data-preset="r7hot">Too hot to cool → <b>R7 refuses</b></button>
+  <button class="preset" data-preset="comfort">Comfortable → <b>R7 allows</b></button>
+  <button class="preset" data-preset="r1">Empty room, lights on → <b>R1</b></button>
+  <button class="preset" data-preset="r3">Bright daylight → <b>R3</b></button>
+  <button class="preset" data-preset="r6">Peak-hour dryer → <b>R6</b></button>
+</div>
+
+<div class="grid">
+
+  <!-- ================= LEFT: simulated sensors ================= -->
+  <section class="card" aria-label="Simulated sensors">
+    <h2>Simulated sensors — room “living”</h2>
+    <p class="sub">Every value below is declared as simulation on the wire. Rule thresholds are marked on each track.</p>
+
+    <!-- temp -->
+    <div class="ctl">
+      <div class="ctl-head">
+        <label for="temp">Temperature</label><span class="tag">SIM · knob stand-in</span>
+        <span class="val" id="tempVal">23.6 °C</span>
+      </div>
+      <div class="slider-wrap">
+        <input type="range" id="temp" min="16" max="32" step="0.1" value="23.6"
+               aria-describedby="tempTicks">
+        <div class="ticks" id="tempTicks">
+          <span class="tick rule" style="left:0%">16 · R7</span>
+          <span class="tick" style="left:37.5%">22</span>
+          <span class="tick rule" style="left:68.75%">27 · R7 refuses →</span>
+          <span class="tick" style="left:100%">32</span>
+        </div>
+      </div>
+      <div class="snap-row">
+        <button class="snap" data-temp="22.0">knob-press · 22.0 °C</button>
+        <button class="snap" data-temp="29.5">knob-press · 29.5 °C</button>
+      </div>
+    </div>
+
+    <!-- lux -->
+    <div class="ctl">
+      <div class="ctl-head">
+        <label for="lux">Light level</label><span class="tag">SIM</span>
+        <span class="val" id="luxVal">110 lx</span>
+      </div>
+      <div class="slider-wrap">
+        <input type="range" id="lux" min="0" max="2000" step="10" value="110">
+        <div class="ticks">
+          <span class="tick" style="left:0%">0</span>
+          <span class="tick rule" style="left:15%">300 · R3 daylight →</span>
+          <span class="tick" style="left:100%">2000</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- humidity -->
+    <div class="ctl">
+      <div class="ctl-head">
+        <label for="hum">Humidity</label><span class="tag">SIM</span>
+        <span class="val" id="humVal">47 %</span>
+      </div>
+      <div class="slider-wrap">
+        <input type="range" id="hum" min="0" max="100" step="1" value="47">
+        <div class="ticks">
+          <span class="tick" style="left:0%">0</span>
+          <span class="tick rule" style="left:60%">60 · R4 →</span>
+          <span class="tick" style="left:100%">100</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- occupancy -->
+    <div class="ctl">
+      <div class="ctl-head"><label>Occupancy</label><span class="tag">SIM</span></div>
+      <div class="tog-row">
+        <div class="seg" role="group" aria-label="Occupancy">
+          <button id="occOn">Occupied</button>
+          <button id="occOff" class="on">Empty</button>
+        </div>
+        <span class="hold" id="occHold">empty 0:00 · R1 fires after 10:00</span>
+      </div>
+    </div>
+
+    <!-- presence -->
+    <div class="ctl">
+      <div class="ctl-head"><label>Presence</label><span class="tag">SIM · geofence stand-in</span></div>
+      <div class="tog-row">
+        <div class="seg" role="group" aria-label="Presence">
+          <button id="presHome" class="on">Home</button>
+          <button id="presAway">Away</button>
+        </div>
+        <span class="hold" id="presHold"></span>
+      </div>
+    </div>
+
+    <!-- loads -->
+    <div class="ctl">
+      <div class="ctl-head"><label>Reported loads</label><span class="tag">SIM report</span></div>
+      <div id="loads">
+        <div class="load-row">
+          <span class="load-name">lights</span>
+          <div class="seg"><button data-load="lights" data-state="on">On</button><button data-load="lights" data-state="off" class="on">Off</button></div>
+          <input class="watts" data-watts="lights" value="12" inputmode="numeric" aria-label="lights watts"> W
+          <span class="load-real" id="real-lights"></span>
+        </div>
+        <div class="load-row">
+          <span class="load-name">ac</span>
+          <div class="seg"><button data-load="ac" data-state="on">On</button><button data-load="ac" data-state="off" class="on">Off</button></div>
+          <input class="watts" data-watts="ac" value="1100" inputmode="numeric" aria-label="ac watts"> W
+          <span class="load-real" id="real-ac"></span>
+        </div>
+        <div class="load-row">
+          <span class="load-name">dryer</span>
+          <div class="seg"><button data-load="dryer" data-state="on">On</button><button data-load="dryer" data-state="off" class="on">Off</button></div>
+          <input class="watts" data-watts="dryer" value="3000" inputmode="numeric" aria-label="dryer watts"> W
+          <span class="load-real" id="real-dryer"></span>
+        </div>
+      </div>
+    </div>
+
+    <div class="auto-row">
+      <input type="checkbox" id="autoSend" checked>
+      <label for="autoSend">Re-broadcast sensors every 2 s (keeps R1/R5 hold timers running on the hub)</label>
+    </div>
+  </section>
+
+  <!-- ================= RIGHT: decisions ================= -->
+  <section class="card" aria-label="System decisions">
+    <h2>What the system decided</h2>
+    <p class="sub">Live from the hub (<span id="feedMode">—</span>). The LLM narrates; Python computes — open a card’s audit formula to verify.</p>
+
+    <div class="refusal" id="refusal" role="alert">
+      <div class="rt">R7 COMFORT GUARDRAIL — ACTUATION REFUSED (HTTP 409)</div>
+      <div class="rr" id="refusalReason"></div>
+    </div>
+
+    <div id="recos"><div class="empty">No recommendations yet. Set a preset on the left and give the rules a moment.</div></div>
+
+    <div class="kv" id="statusKv"></div>
+
+    <div class="log">
+      <h2>Wire log</h2>
+      <div id="log" aria-live="polite"></div>
+    </div>
+  </section>
+</div>
+
+<footer>Simulator page — declared simulated inputs only. Actuator results shown above are real device read-backs (source: kasa) when hardware is attached.</footer>
+
+<script>
+(function(){
+  "use strict";
+  var ROOM = "living";
+
+  // ---------- state ----------
+  var sim = { occupancy:false, lux:110, temp_c:23.6, humidity:47 };
+  var presence = { presence:"home", distance_m: 10 };
+  var loadsSim = { lights:{state:"off",watts:12}, ac:{state:"off",watts:1100}, dryer:{state:"off",watts:3000} };
+  var occChangedAt = Date.now(), presChangedAt = Date.now();
+  var ws = null, pollTimer = null, wsRetry = 0;
+  var connected = false, warnedNoHub = false;
+
+  var $ = function(id){ return document.getElementById(id); };
+  function esc(s){ return String(s==null?"":s).replace(/[&<>"']/g,function(c){
+    return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c];});}
+
+  // ---------- hub url ----------
+  function hubBase(){
+    var v = $("hubUrl").value.trim().replace(/\/+$/,"");
+    return v || location.origin;
+  }
+  function wsUrl(){
+    var b = hubBase();
+    return b.replace(/^http/i,"ws") + "/ws";
+  }
+
+  // ---------- logging ----------
+  function log(msg, cls){
+    var el = $("log");
+    var t = new Date().toTimeString().slice(0,8);
+    var line = document.createElement("div");
+    if(cls) line.className = cls;
+    line.textContent = t + "  " + msg;
+    el.appendChild(line);
+    while(el.childNodes.length > 120) el.removeChild(el.firstChild);
+    el.scrollTop = el.scrollHeight;
+  }
+
+  // ---------- HTTP ----------
+  function post(path, body){
+    return fetch(hubBase()+path, {
+      method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body: JSON.stringify(body)
+    });
+  }
+
+  function banner(msg, cls){
+    var b = $("connBanner");
+    b.textContent = msg || "";
+    b.className = msg ? (cls || "info") : "";
+  }
+  function requireHub(){
+    if(connected) return true;
+    if(!warnedNoHub){
+      warnedNoHub = true;
+      log("not connected to the hub — nothing was sent. Set the hub URL above and press Connect.", "err");
+    }
+    return false;
+  }
+
+  var sensorTimer = null;
+  function sendSensor(immediate){
+    if(!requireHub()) return;
+    clearTimeout(sensorTimer);
+    sensorTimer = setTimeout(function(){
+      var body = { room:ROOM, occupancy:sim.occupancy, lux:Math.round(sim.lux),
+                   temp_c:+sim.temp_c.toFixed(1), humidity:+sim.humidity.toFixed(1) };
+      post("/api/sensor", body).then(function(r){
+        if(!r.ok) log("POST /api/sensor -> HTTP "+r.status, "err");
+      }).catch(function(){ log("POST /api/sensor failed — hub unreachable", "err"); });
+    }, immediate?0:220);
+  }
+
+  function sendLoad(name){
+    if(!requireHub()) return;
+    var l = loadsSim[name];
+    post("/api/load", { key:ROOM+"/"+name, state:l.state, watts:+l.watts })
+      .then(function(r){
+        log("load "+name+" -> "+l.state+" ("+l.watts+" W)"+(r.ok?"":"  HTTP "+r.status), r.ok?null:"err");
+      })
+      .catch(function(){ log("POST /api/load failed", "err"); });
+  }
+
+  function sendPresence(){
+    if(!requireHub()) return;
+    post("/api/presence", { presence:presence.presence, distance_m:presence.distance_m })
+      .then(function(r){ log("presence -> "+presence.presence+(r.ok?"":"  HTTP "+r.status), r.ok?null:"err"); })
+      .catch(function(){ log("POST /api/presence failed", "err"); });
+  }
+
+  // ---------- apply / R7 refusal ----------
+  function applyReco(recoId, action, btn){
+    if(!requireHub()) return;
+    btn.disabled = true;
+    hideRefusal();
+    post("/api/apply", { reco_id:recoId, action:action, approved_by:"simulator" })
+      .then(function(r){
+        if(r.status === 409){
+          return r.text().then(function(t){
+            var reason = t;
+            try{
+              var j = JSON.parse(t);
+              reason = (j.detail && (j.detail.reason||j.detail.message)) || j.reason || j.message ||
+                       (typeof j.detail==="string" ? j.detail : JSON.stringify(j));
+            }catch(e){}
+            showRefusal(reason);
+            log("APPLY "+recoId+" "+action+" -> 409 REFUSED (R7)", "amb");
+          });
+        }
+        if(r.ok){
+          log("APPLY "+recoId+" "+action+" -> OK", "okc");
+        } else {
+          log("APPLY "+recoId+" -> HTTP "+r.status, "err");
+        }
+      })
+      .catch(function(){ log("POST /api/apply failed", "err"); })
+      .then(function(){ btn.disabled = false; });
+  }
+  function showRefusal(reason){
+    $("refusalReason").textContent = reason || "The comfort guardrail declined this action.";
+    $("refusal").classList.add("show");
+  }
+  function hideRefusal(){ $("refusal").classList.remove("show"); }
+
+  // ---------- live feed: WS with polling fallback ----------
+  function setConn(mode){ // "ws" | "poll" | "probing" | "down"
+    var d = $("connDot"), t = $("connTxt");
+    d.className = "dot" + (mode==="ws"?" ok":mode==="poll"||mode==="probing"?" poll":"");
+    t.textContent = mode==="ws" ? "live /ws" : mode==="poll" ? "polling /api/state"
+                  : mode==="probing" ? "checking hub…" : "disconnected";
+    $("feedMode").textContent = mode==="ws" ? "websocket push" : mode==="poll" ? "2 s polling"
+                  : mode==="probing" ? "checking hub…" : "no connection";
+  }
+
+  // Verify the target actually IS the hub before sending anything.
+  // A 404 on /api/state means some other server answered (wrong port, wrong app).
+  function probe(){
+    var base = hubBase();
+    connected = false;
+    setConn("probing");
+    banner("Checking " + base + " …");
+    return fetch(base + "/api/state").then(function(r){
+      if(r.status === 404) throw { kind:"nothub" };
+      if(!r.ok) throw { kind:"http", code:r.status };
+      return r.json();
+    }).then(function(s){
+      connected = true; warnedNoHub = false;
+      banner("");
+      log("hub verified at " + base + " (/api/state OK)", "okc");
+      if(base !== location.origin){
+        log("tip: open simulator.html?hub=" + base + " to reconnect automatically next time");
+      }
+      renderState(s);
+      connectWS();
+      sendSensor(true);
+    }).catch(function(e){
+      setConn("down");
+      if(e && e.kind === "nothub"){
+        banner("A server answered at " + base + " but it has no /api/state — this is not the hub, " +
+               "so every button would get a 404. Enter the hub address (http://<PC_IP>:8000) above and " +
+               "press Connect. Simplest fix: serve this file from the hub itself, next to /phone.", "warn");
+        log("probe: " + base + " is not the hub (404 on /api/state)", "err");
+      } else if(e && e.kind === "http"){
+        banner("Hub at " + base + " answered HTTP " + e.code + " on /api/state — check the hub logs.", "warn");
+        log("probe: /api/state -> HTTP " + e.code, "err");
+      } else {
+        var mixed = location.protocol === "https:" && base.indexOf("http://") === 0;
+        banner(mixed
+          ? "This page is loaded over HTTPS, so the browser silently blocks plain-HTTP requests to " +
+            base + ". Serve the file from the hub (add a route next to /phone) or open the page itself over http://."
+          : "Could not reach " + base + ". Check the address, that the hub is running, and that this " +
+            "device is on the same Wi-Fi as the PC.", "warn");
+        log("probe failed: " + base + " unreachable", "err");
+      }
+    });
+  }
+
+  function startPolling(){
+    if(pollTimer) return;
+    pollTimer = setInterval(function(){
+      if(!connected) return;
+      fetch(hubBase()+"/api/state").then(function(r){
+        if(r.status === 404){ // hub vanished / URL changed under us
+          connected = false; setConn("down");
+          banner("The server at " + hubBase() + " no longer answers /api/state. Press Connect to re-check.", "warn");
+          throw 0;
+        }
+        if(!r.ok) throw 0;
+        return r.json();
+      }).then(function(s){ setConn(ws && ws.readyState===1 ? "ws" : "poll"); renderState(s); })
+        .catch(function(){ if(!(ws && ws.readyState===1) && connected) setConn("down"); });
+    }, 2000);
+  }
+
+  function connectWS(){
+    try{ if(ws) ws.close(); }catch(e){}
+    try{
+      ws = new WebSocket(wsUrl());
+    }catch(e){ setConn("poll"); startPolling(); return; }
+    ws.onopen = function(){ wsRetry = 0; setConn("ws"); log("websocket connected", "okc"); };
+    ws.onmessage = function(ev){
+      try{ renderState(JSON.parse(ev.data)); }catch(e){}
+    };
+    ws.onclose = function(){
+      if(!connected) return;
+      setConn("poll");
+      var wait = Math.min(15000, 1000*Math.pow(2, wsRetry++));
+      setTimeout(function(){ if(connected) connectWS(); }, wait);
+    };
+    ws.onerror = function(){ try{ ws.close(); }catch(e){} };
+    startPolling(); // belt and braces; renderState is idempotent
+  }
+
+  // ---------- render ----------
+  function renderState(s){
+    if(!s || typeof s !== "object") return;
+
+    // recommendations
+    var recos = s.recos || s.recommendations || [];
+    var box = $("recos");
+    if(!recos.length){
+      box.innerHTML = '<div class="empty">No active recommendations. The rules are satisfied — or still waiting on a hold timer (R1 needs 10 min empty, R5 needs 2 h away).</div>';
+    } else {
+      box.innerHTML = recos.map(function(r){
+        var sev = (r.severity||"info").toLowerCase();
+        var actions = (r.actions && r.actions.length ? r.actions : ["off"]);
+        var stats = [];
+        if(r.kwh != null)   stats.push("<span><b>"+esc(r.kwh)+"</b> kWh</span>");
+        if(r.usd != null)   stats.push("<span>$<b>"+esc(r.usd)+"</b></span>");
+        if(r.co2_kg != null)stats.push("<span><b>"+esc(r.co2_kg)+"</b> kg CO₂</span>");
+        return '<div class="reco '+esc(sev)+'" data-id="'+esc(r.id)+'">'
+          + '<div class="reco-top"><span class="sev '+esc(sev)+'">'+esc(sev)+'</span>'
+          + '<span class="reco-title">'+esc(r.title||r.id)+'</span></div>'
+          + (r.body ? '<div class="reco-body">'+esc(r.body)+'</div>' : "")
+          + (stats.length ? '<div class="reco-stats">'+stats.join("")+'</div>' : "")
+          + (r.formula ? '<details class="formula"><summary>audit formula — Python computed this, not the LLM</summary><pre>'+esc(r.formula)+'</pre></details>' : "")
+          + '<div class="actions">'+ actions.map(function(a){
+              return '<button class="apply '+(a==="off"?"off":"")+'" data-reco="'+esc(r.id)+'" data-action="'+esc(a)+'">Approve: switch '+esc(a)+'</button>';
+            }).join("") +'</div>'
+          + '</div>';
+      }).join("");
+    }
+
+    // real load read-back (kasa vs simulated) if present
+    var loads = s.loads || {};
+    ["lights","ac","dryer"].forEach(function(name){
+      var el = $("real-"+name); if(!el) return;
+      var l = loads[ROOM+"/"+name] || (loads[ROOM] && loads[ROOM][name]);
+      if(l && typeof l === "object"){
+        var src = l.source || l.src || "";
+        el.innerHTML = "hub sees: <b>"+esc(l.state||"?")+"</b>"+(src?" · "+esc(src):"");
+      } else el.textContent = "";
+    });
+
+    // status strip
+    var kv = [];
+    if(s.tariff){
+      var t = s.tariff;
+      kv.push("tariff <b>"+esc(t.period||t.name||"")+"</b>"+(t.rate!=null?" $"+esc(t.rate)+"/kWh":""));
+    }
+    var realized = s.realized;
+    if(realized != null){
+      if(typeof realized === "object")
+        kv.push("realized savings <b>$"+esc(realized.usd!=null?realized.usd:JSON.stringify(realized))+"</b>");
+      else kv.push("realized savings <b>"+esc(realized)+"</b>");
+    }
+    if(s.user && s.user.presence) kv.push("hub presence <b>"+esc(s.user.presence)+"</b>");
+    var room = s.rooms && s.rooms[ROOM];
+    if(room && room.temp_c != null) kv.push("hub temp <b>"+esc(room.temp_c)+" °C</b>");
+    $("statusKv").innerHTML = kv.join(" · ") || "";
+  }
+
+  // delegated apply clicks
+  $("recos").addEventListener("click", function(e){
+    var b = e.target.closest("button.apply");
+    if(b) applyReco(b.getAttribute("data-reco"), b.getAttribute("data-action"), b);
+  });
+
+  // ---------- controls wiring ----------
+  function bindSlider(id, key, fmt, valEl, hotFn){
+    var el = $(id);
+    el.addEventListener("input", function(){
+      sim[key] = +el.value;
+      valEl.textContent = fmt(+el.value);
+      valEl.classList.toggle("hot", hotFn ? hotFn(+el.value) : false);
+      sendSensor(false);
+    });
+  }
+  bindSlider("temp","temp_c",function(v){return v.toFixed(1)+" °C";},$("tempVal"),function(v){return v>27||v<16;});
+  bindSlider("lux","lux",function(v){return Math.round(v)+" lx";},$("luxVal"));
+  bindSlider("hum","humidity",function(v){return Math.round(v)+" %";},$("humVal"));
+
+  document.querySelectorAll(".snap").forEach(function(b){
+    b.addEventListener("click", function(){
+      setTemp(+b.getAttribute("data-temp"));
+    });
+  });
+  function setTemp(v){
+    sim.temp_c = v; $("temp").value = v;
+    $("tempVal").textContent = v.toFixed(1)+" °C";
+    $("tempVal").classList.toggle("hot", v>27||v<16);
+    sendSensor(true);
+  }
+  function setLux(v){ sim.lux=v; $("lux").value=v; $("luxVal").textContent=Math.round(v)+" lx"; }
+  function setHum(v){ sim.humidity=v; $("hum").value=v; $("humVal").textContent=Math.round(v)+" %"; }
+
+  function setOcc(on, silent){
+    if(sim.occupancy !== on){ occChangedAt = Date.now(); }
+    sim.occupancy = on;
+    $("occOn").classList.toggle("on", on);
+    $("occOff").classList.toggle("on", !on);
+    if(!silent) sendSensor(true);
+  }
+  $("occOn").addEventListener("click", function(){ setOcc(true); });
+  $("occOff").addEventListener("click", function(){ setOcc(false); });
+
+  function setPres(p, silent){
+    if(presence.presence !== p){ presChangedAt = Date.now(); }
+    presence.presence = p;
+    presence.distance_m = p==="away" ? 2400 : 10;
+    $("presHome").classList.toggle("on", p==="home");
+    $("presAway").classList.toggle("on", p==="away");
+    if(!silent) sendPresence();
+  }
+  $("presHome").addEventListener("click", function(){ setPres("home"); });
+  $("presAway").addEventListener("click", function(){ setPres("away"); });
+
+  // hold timers (client-side guidance only — the hub keeps the real clocks)
+  setInterval(function(){
+    function mmss(ms){ var s=Math.floor(ms/1000); return Math.floor(s/60)+":"+String(s%60).padStart(2,"0"); }
+    $("occHold").textContent = sim.occupancy
+      ? "occupied"
+      : "empty "+mmss(Date.now()-occChangedAt)+" · R1 fires after 10:00";
+    $("presHold").textContent = presence.presence==="away"
+      ? "away "+mmss(Date.now()-presChangedAt)+" · R5 needs 2 h"
+      : "";
+  }, 1000);
+
+  // loads
+  document.querySelectorAll("[data-load]").forEach(function(b){
+    b.addEventListener("click", function(){
+      var name = b.getAttribute("data-load"), st = b.getAttribute("data-state");
+      setLoad(name, st);
+    });
+  });
+  document.querySelectorAll(".watts").forEach(function(inp){
+    inp.addEventListener("change", function(){
+      var name = inp.getAttribute("data-watts");
+      loadsSim[name].watts = +inp.value || 0;
+      sendLoad(name);
+    });
+  });
+  function setLoad(name, st, watts){
+    loadsSim[name].state = st;
+    if(watts != null){
+      loadsSim[name].watts = watts;
+      var inp = document.querySelector('.watts[data-watts="'+name+'"]');
+      if(inp) inp.value = watts;
+    }
+    document.querySelectorAll('[data-load="'+name+'"]').forEach(function(x){
+      x.classList.toggle("on", x.getAttribute("data-state")===st);
+    });
+    sendLoad(name);
+  }
+
+  // auto broadcast
+  setInterval(function(){
+    if(connected && $("autoSend").checked) sendSensor(true);
+  }, 2000);
+
+  // ---------- presets ----------
+  var presets = {
+    r1: function(){ setOcc(false); setLoad("lights","on"); log("preset: Empty room + lights on — R1 fires after the 10-min hold", "amb"); },
+    r2: function(){ setPres("away"); setLoad("ac","on",1100); log("preset: Away + A/C 1100 W — expect R2 critical", "amb"); },
+    r3: function(){ setLux(640); setLoad("lights","on"); sendSensor(true); log("preset: lux 640 + lights on — expect R3 warning", "amb"); },
+    r7hot: function(){ setTemp(29.5); log("preset: 29.5 °C — R7 will REFUSE any A/C-off approval (expect 409)", "amb"); },
+    comfort: function(){ setTemp(22.0); log("preset: 22.0 °C — R7 allows actuation", "okc"); },
+    r6: function(){ setLoad("dryer","on",3000); log("preset: dryer 3000 W — R6 fires inside the 16:00–21:00 peak window (hub clock)", "amb"); }
+  };
+  document.querySelectorAll(".preset").forEach(function(b){
+    b.addEventListener("click", function(){ presets[b.getAttribute("data-preset")](); });
+  });
+
+  // ---------- connect ----------
+  $("connectBtn").addEventListener("click", function(){ probe(); });
+  $("hubUrl").addEventListener("keydown", function(e){ if(e.key === "Enter") probe(); });
+
+  // ?hub=http://<PC_IP>:8000 pre-fills and auto-connects (bookmarkable)
+  var qHub = "";
+  try{ qHub = new URLSearchParams(location.search).get("hub") || ""; }catch(e){}
+  if(qHub) $("hubUrl").value = qHub;
+
+  if(qHub || location.protocol.indexOf("http") === 0){
+    probe(); // verifies /api/state before any control sends anything
+  } else {
+    setConn("down");
+    banner("Opened from file:// — enter the hub URL (http://<PC_IP>:8000) and press Connect.", "warn");
+  }
+})();
+</script>
+</body>
+</html>
