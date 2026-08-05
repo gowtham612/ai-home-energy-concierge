@@ -177,7 +177,7 @@ Raise the room temperature (sensor injection or the real sensor), then tap Appro
 > uncalibrated, so we use it as a threshold, not a measurement. And actuation is
 > human-approved by design; we'd want a lot more validation before removing the human.
 >
-> Repo, README, Apache license, 32 tests, and a three-command quickstart are up. Thanks."
+> Repo, README, MIT license, 32 tests, and a three-command quickstart are up. Thanks."
 
 ---
 

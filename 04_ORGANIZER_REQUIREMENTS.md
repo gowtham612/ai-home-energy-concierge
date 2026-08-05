@@ -10,7 +10,7 @@ Distilled from **`Snapdragon Multiverse Hackathon_Internal.pdf`** (orientation, 
 |---|---|---|---|
 | ☐ | **Personal GitHub repo**, public | p.7 | — |
 | ☐ | **All code open source** | p.7 | stated in `README.md` § License |
-| ☐ | **Open-source license file** | p.7 | `code/LICENSE` (Apache 2.0) ✅ *in packet* |
+| ☐ | **Open-source license file** | p.7 | `code/LICENSE` (MIT) ✅ *in packet* |
 | ☐ | README: **application description** | p.7 | `README.md` top ✅ |
 | ☑ | README: **names AND emails of every member** | p.7 | **DONE** — all 4 members with emails, in both `code/README.md` § Team and the root `README.md` § Team |
 | ☐ | README: **setup instructions from scratch, incl. dependencies** | p.7 | `README.md` § Setup ✅ |

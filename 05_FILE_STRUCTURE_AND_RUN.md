@@ -30,7 +30,7 @@ hackathon_energy_concierge/
 └── code/                           ← this is what goes in the GitHub repo root
     │
     ├── README.md                   the judged submission README
-    ├── LICENSE                     Apache 2.0
+    ├── LICENSE                     MIT
     ├── requirements.txt            6 pinned dependencies
     ├── mosquitto.conf              broker config that binds 0.0.0.0 (not just localhost)
     ├── smoke_test.py               32 checks — run this first, always

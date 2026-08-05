@@ -201,7 +201,7 @@ Goal: **a fake but complete pipeline**. Nothing real, everything connected.
 - [ ] Collect devices. Confirm UNO Q image and whether the Linux side is exposed.
 - [ ] **COMPLIANCE, 45 min, do it now while it is cheap:**
   - [ ] Create the **personal, public** GitHub repo; push the packet; add everyone as collaborators.
-  - [ ] `LICENSE` present (Apache 2.0 — already in the packet).
+  - [ ] `LICENSE` present (MIT — already in the packet).
   - [ ] Fill the **team table** in `README.md` with every member's **name and email**.
   - [ ] Confirm the deadline at office hours (**12:00 PM vs 1:00 PM** — the two decks disagree).
 - [ ] **Freeze the MQTT contract** (above, including the two new command/actuator topics) in `docs/CONTRACT.md`.

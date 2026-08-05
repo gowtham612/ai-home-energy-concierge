@@ -60,7 +60,7 @@ git push
 - `README.md` — the packet index
 - `05_FILE_STRUCTURE_AND_RUN.md` — the operator's manual, genuinely useful to a reader
 - `presentation.html` — the deck itself
-- `code/` — the submission, Apache 2.0 licensed
+- `code/` — the submission, MIT licensed
 - The three screenshots
 
 ## Also still outstanding for the submission

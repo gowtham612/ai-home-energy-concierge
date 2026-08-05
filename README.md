@@ -38,7 +38,7 @@ repository root is the first page a reader lands on.
 
 ## Live repository
 
-**https://github.com/gowtham612/ai-home-energy-concierge** — public, Apache 2.0.
+**https://github.com/gowtham612/ai-home-energy-concierge** — public, MIT licensed.
 Verified: a fresh `git clone` passes 32/32 smoke checks with no manual fixes.
 
 Submit that URL via the organizers' Microsoft Form by **Friday 12:00 PM** (target 10:30).

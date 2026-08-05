@@ -550,7 +550,7 @@ code/
   mosquitto.conf       broker config that binds 0.0.0.0
   requirements.txt
   smoke_test.py        32 checks, including the actuation loop and safety gate
-  LICENSE              Apache 2.0
+  LICENSE              MIT
 ```
 
 ## Limitations, honestly
@@ -578,7 +578,7 @@ code/
 
 ## Submission
 
-**Repository:** <https://github.com/gowtham612/ai-home-energy-concierge> — public, Apache 2.0.
+**Repository:** <https://github.com/gowtham612/ai-home-energy-concierge> — public, MIT licensed.
 
 This is the repository submitted via the organizers' Microsoft Form. The application
 lives in `code/`; this file is its README (description, setup, usage). The repository
@@ -598,7 +598,7 @@ where each of us carried the work.
 
 ## License
 
-Licensed under the **Apache License 2.0** — see [LICENSE](LICENSE). All code in this
+Licensed under the **MIT License** — see [LICENSE](LICENSE). All code in this
 repository is open source.
 
 ## References
