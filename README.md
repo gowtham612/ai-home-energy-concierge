@@ -26,15 +26,15 @@ Event: Snapdragon Multiverse 2026 · Mon Aug 3 – Fri Aug 7 · submit Fri **1:0
 
 | Name | Email | Role |
 |---|---|---|
-| Gowtham Raj Baskaran | gbaskara@qti.qualcomm.com | Joint concept & design · implementation lead |
-| Nanda Kishore Nagabhushana | nnagabhu@qti.qualcomm.com | Joint concept & design · project proposal |
-| Yash Joshi | yashjosh@qti.qualcomm.com | Joint concept & design |
-| Ajay Reddy | areddy@qti.qualcomm.com | Joint concept & design |
+| Gowtham Raj Baskaran | gbaskara@qti.qualcomm.com | Implementation — hub, rules engine, UNO Q firmware, Kasa actuation |
+| Nanda Kishore Nagabhushana | nnagabhu@qti.qualcomm.com | Architecture & requirements · project proposal |
+| Yash Joshi | yashjosh@qti.qualcomm.com | On-device AI — GenieX NPU narration, QUAD profiling, benchmarks |
+| Ajay Reddy | areddy@qti.qualcomm.com | Product & demo — energy model, dashboard/simulator UX, presentation |
 
-All four members developed the concept, architecture and requirements together;
-Gowtham led the implementation. Same table appears in `code/README.md` — this copy is
-here because it is a hard eligibility requirement and the repository root is the first
-page a reader lands on.
+The four of us developed the concept and architecture together; the roles above are
+where each of us carried the work. The same table appears in `code/README.md` — this
+copy is here because names and emails are a hard eligibility requirement and the
+repository root is the first page a reader lands on.
 
 ## Live repository
 

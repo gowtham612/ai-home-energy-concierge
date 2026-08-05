@@ -588,17 +588,13 @@ root additionally carries the planning packet and the presentation deck.
 
 | Name | Email | Role |
 |---|---|---|
-| Gowtham Raj Baskaran | gbaskara@qti.qualcomm.com | Joint concept & design · implementation lead |
-| Nanda Kishore Nagabhushana | nnagabhu@qti.qualcomm.com | Joint concept & design · project proposal |
-| Yash Joshi | yashjosh@qti.qualcomm.com | Joint concept & design |
-| Ajay Reddy | areddy@qti.qualcomm.com | Joint concept & design |
+| Gowtham Raj Baskaran | gbaskara@qti.qualcomm.com | Implementation — hub, rules engine, UNO Q firmware, Kasa actuation |
+| Nanda Kishore Nagabhushana | nnagabhu@qti.qualcomm.com | Architecture & requirements · project proposal |
+| Yash Joshi | yashjosh@qti.qualcomm.com | On-device AI — GenieX NPU narration, QUAD profiling, benchmarks |
+| Ajay Reddy | areddy@qti.qualcomm.com | Product & demo — energy model, dashboard/simulator UX, presentation |
 
-All four members developed the concept, architecture and requirements together.
-Gowtham led the implementation — the hub and rules engine, the UNO Q firmware, the
-Kasa actuation path and the on-device AI integration — and is the best first point of
-contact for questions about the code.
-
-Project proposal submitted by Nanda Kishore Nagabhushana.
+The four of us developed the concept and architecture together; the roles above are
+where each of us carried the work.
 
 ## License
 
