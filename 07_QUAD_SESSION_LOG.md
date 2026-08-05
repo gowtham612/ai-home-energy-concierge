@@ -703,3 +703,86 @@ table and are marked `"metered": false` — the two are never conflated.
 - `/quad-profile` remains blocked by the two server-side failures in §10.
 - Optional: a Modulino **Thermo** would make `temp_c` a real measurement and
   retire the last declared simulation in the sensing path.
+
+---
+
+# 15. Rebuilding the board from scratch
+
+Nothing here is needed for a normal power cycle — the firmware lives in STM32
+flash and the Wi-Fi profile lives in NetworkManager, so both survive unplugging.
+This section is for a reflash, a factory reset, or a second board.
+
+## 15.1 What survives a power cycle (do not redo)
+
+| Thing | Survives? |
+|---|---|
+| Flashed MCU firmware | yes — in STM32 flash |
+| Wi-Fi credentials | yes — NetworkManager profile |
+| `~/energy-venv`, `~/Arduino/libraries`, the repo clone | yes — on the eMMC |
+| The running publisher process | **no** — restart it, see §0.1 |
+| `adb reverse` tunnels | **no** — re-run if using USB-only mode |
+
+## 15.2 Full rebuild
+
+```bash
+ADB="$LOCALAPPDATA/Android/Sdk/platform-tools/adb.exe"   # from Google's official zip
+$ADB devices                                             # expect one device
+
+# 1. Network (skip if you will run USB-only via adb reverse)
+$ADB shell "nmcli device wifi connect '<SSID>' password '<PASSWORD>' ifname wlan0"
+$ADB shell "ip -4 addr show wlan0 | grep inet"
+
+# 2. Arduino libraries.
+#    WITH internet on the board this is one line - arduino-cli resolves the whole
+#    dependency tree for you:
+$ADB shell "arduino-cli lib install Arduino_Modulino Arduino_RouterBridge"
+#
+#    WITHOUT internet, clone them on the PC and push. 14 libraries, two chains:
+#      Serial support : Arduino_RouterBridge -> Arduino_RPClite -> MsgPack
+#                       -> ArxContainer, ArxTypeTraits, DebugLog
+#      Modulino       : Arduino_Modulino -> VL53L4CD, VL53L4ED, Arduino_LSM6DSOX,
+#                       Arduino_LPS22HB, Arduino_HS300x, ArduinoGraphics,
+#                       Arduino_LTR381RGB
+#    arduino-libraries/* and stm32duino/{VL53L4CD,VL53L4ED} and hideakitai/{MsgPack,
+#    ArxContainer,ArxTypeTraits,DebugLog} on GitHub. Then for each:
+#      git clone --depth 1 https://github.com/<org>/<lib>.git && rm -rf <lib>/.git
+#      $ADB push <lib> /home/arduino/Arduino/libraries/<lib>
+$ADB shell "arduino-cli lib list"        # expect 14
+
+# 3. Python environment
+$ADB shell "echo '<sudo-pw>' | sudo -S apt install -y python3-serial python3-paho-mqtt"
+$ADB shell "python3 -m venv --system-site-packages ~/energy-venv"
+$ADB shell "~/energy-venv/bin/python3 -m pip install python-kasa tzdata"
+#   tzdata is NOT optional: python-kasa reads the device timezone and Debian moved
+#   legacy zone names (PST8PDT) into tzdata-legacy. Without it every Kasa connect
+#   fails with "No time zone found with key PST8PDT", which reads like a network
+#   error and is not.
+
+# 4. Code + config
+$ADB shell "git clone https://github.com/gowtham612/ai-home-energy-concierge.git"
+$ADB push code/arduino/board.env /home/arduino/ai-home-energy-concierge/code/arduino/board.env
+
+# 5. Flash the firmware (the board programs its own STM32 over SWD)
+$ADB push code/arduino/sketch /tmp/sketch
+$ADB shell "arduino-cli compile --fqbn arduino:zephyr:unoq /tmp/sketch"
+$ADB shell "arduino-cli upload  --fqbn arduino:zephyr:unoq /tmp/sketch"
+
+# 6. Start the publisher — see §0.1
+```
+
+**Gate:** flash `code/arduino/scanner` first and read the monitor; expect a
+Modulino address on `Wire1` (Knob = `0x3A`). If both buses are empty, fix the
+Qwiic cable before going further.
+
+## 15.3 With the board unplugged, what still works on the PC
+
+Everything except physical actuation:
+
+- hub, rules engine, GenieX narration, dashboard, `/simulator` — all fine
+- `smoke_test.py` — 32/32 (it needs no hardware, and actually prefers the
+  publisher stopped; see §14.6)
+- **Kasa switching does NOT work.** The publisher that drives the smart devices
+  runs *on the board*. With it gone, the hub still publishes
+  `home/command/...` and returns HTTP 200, but nothing is listening, so no
+  actuator confirmation ever comes back and no lamp moves. Watch for the missing
+  `home/actuator/...` record rather than trusting the 200.
