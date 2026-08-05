@@ -25,3 +25,7 @@ code/arduino/board.env
 # Local run artifacts
 code/*.log
 code/hub_server*.log
+
+# Demo recording lives next to presentation.html but is not committed by default
+# (large binary). Remove this line if you want it in the repo for submission.
+demo.mp4

@@ -8,6 +8,33 @@
   Navigation:  arrow keys / space / click  ·  F = fullscreen  ·  O = overview  ·  P = print
   Colours follow the dashboard's validated dark palette so the deck and the product
   read as one system.
+
+  ───────────────────────────────────────────────────────────────────────────────
+  5-MINUTE RUN SHEET.  There are 16 slides; you cannot show all of them in 5:00.
+  The video is 45 s, leaving ~4:15 of talking. Plan for SEVEN slides and use the
+  rest as backup to answer questions from (press O for overview, then click).
+
+     0:00  1  Title                                    15 s
+     0:15  2  The problem — no device sees it all      30 s
+     0:45  5  Findings, ranked, each auditable         40 s
+     1:25 13  DEMO VIDEO (45 s) + the refusal          75 s   <- the whole point
+     2:40  9  The guardrail gates the actuator         45 s
+     3:25 10  Measured, not claimed                    45 s
+     4:10 15  Summary — four devices, one insight      35 s
+     4:45 16  Team + questions                         15 s
+
+  BACKUP, only if asked:
+     3  closed loop   4  architecture   6  approve→realized   7  phone
+     8  auditable AI  11 graceful degradation  12 QUAD & where we deviated
+     14 honest limitations
+
+  The single most persuasive 30 seconds is the R7 refusal. If you are running
+  short, cut slides 5 and 10 before you cut that.
+  ───────────────────────────────────────────────────────────────────────────────
+
+  DEMO VIDEO: slide 13 references demo.mp4 relatively. Keep demo.mp4 in the same
+  folder as presentation.html (it is not base64-inlined — that would add tens of
+  MB to this file). The slide degrades to a visible note if the file is absent.
 -->
 <html lang="en">
 <head>
@@ -285,7 +312,7 @@
         <span>Python computes $</span><i>→</i>
         <span>LLM explains</span><i>→</i>
         <span class="act">user approves</span><i>→</i>
-        <span class="act">servo flips the switch</span><i>→</i>
+        <span class="act">the real lamp goes dark</span><i>→</i>
         <span class="ok">saving realized</span>
       </div>
       <div class="cols c3" style="margin-top:6px">
@@ -296,9 +323,10 @@
         </div>
         <div class="card">
           <h3><i class="dot" style="background:var(--s2)"></i>It acts physically</h3>
-          <p>Approve on the phone and the UNO Q drives a servo that presses a real light
-             switch, then reports back. The saving moves from <em>avoidable</em> to
-             <strong>realized</strong>.</p>
+          <p>Approve on the phone and the UNO Q switches a <strong>real lamp</strong> — which
+             reports its own draw falling <strong>10.8 W → 0.0 W</strong>. The saving moves
+             from <em>avoidable</em> to <strong>realized</strong>, and it is
+             <em>measured</em>, not assumed.</p>
         </div>
         <div class="card">
           <h3><i class="dot" style="background:var(--good)"></i>It knows when to refuse</h3>
@@ -327,13 +355,13 @@
 |  | STM32U585    | | Dragonwing   | |  MQTT over Wi-Fi
 |  | Cortex-M33   | | QRB2210      | |----------------+
 |  | (Zephyr)     |>| Debian/Python| |                |
-|  | PIR/LDR/temp |<| MQTT client  | |&lt;--- commands   |
-|  | <span class="em">SERVO / RELAY</span>| | edge filter  | |                |
-|  +--------------+ +--------------+ |                v
-+------------------------------------+   +---------------------------+
-                  ^                      | Copilot+ PC               |
-                  | <span class="em">physical action</span>      | Snapdragon X Elite        |
-                  |                      | <span class="em">45 TOPS NPU</span> ORCHESTRATOR |
+|  | Modulino     |<| MQTT client  | |&lt;--- commands   |
+|  | <span class="em">Qwiic / I2C</span>  | | edge filter  | |                |
+|  +--------------+ +------+-------+ |                v
++------------------------------|-----+   +---------------------------+
+                  |            v          | Copilot+ PC               |
+        <span class="em">physical action</span>  <span class="em">Kasa bulb/plug</span>   | Snapdragon X Elite        |
+                  |     <span class="em">(reports real W)</span> | <span class="em">45 TOPS NPU</span> ORCHESTRATOR |
 +-----------------------------+          |                           |
 |  Galaxy S25                 |          |  mosquitto broker         |
 |  Snapdragon 8 Elite         |--------->|  FastAPI + WebSocket      |
@@ -425,9 +453,9 @@
           </div>
           <div class="stat g"><div class="label">Realized by acting</div><div class="value">$0.05</div><div class="foot">1 action applied · 0.09 kWh avoided · booked as realized, not merely avoidable</div></div>
           <div class="callout good">
-            <strong>This is the archetype requirement.</strong> Command published → UNO Q drove
-            the servo → confirmation returned → the hub closed the finding. Verified end to end,
-            not simulated.
+            <strong>This is the archetype requirement.</strong> Command published → UNO Q switched
+            the real lamp → the lamp's own meter confirmed <strong>0.0 W</strong> → the hub closed
+            the finding. Verified end to end on real hardware, not simulated.
           </div>
           <div class="callout">
             The confirmation reports <code>source</code> honestly —
@@ -585,7 +613,7 @@ Power figure source:
         <div class="stat hero b"><div class="label">Rules engine, 7 rules</div><div class="value">0.027<span class="unit">ms</span></div><div class="foot">p50 · p95 0.046 ms</div></div>
         <div class="stat hero"><div class="label">Snapshot → recommendation</div><div class="value">0.035<span class="unit">ms</span></div><div class="foot">rules + math + narration</div></div>
         <div class="stat hero g"><div class="label">Broker traffic avoided</div><div class="value">88.7<span class="unit">%</span></div><div class="foot">68 published of 600 sampled</div></div>
-        <div class="stat hero"><div class="label">Peak RSS</div><div class="value">32.9<span class="unit">MB</span></div><div class="foot">full reasoning stack</div></div>
+        <div class="stat hero"><div class="label">Narration on the NPU</div><div class="value">3.11<span class="unit">s</span></div><div class="foot">GenieX · Qwen3-4B W4A16 · p95 3.27 s</div></div>
       </div>
       <div class="split" style="margin-top:4px">
         <div>
@@ -595,10 +623,10 @@ Power figure source:
               <tr><td class="k">Energy-model estimate</td><td class="num">0.004</td><td class="num">0.007</td><td>ms</td></tr>
               <tr><td class="k">Rules engine (7 rules)</td><td class="num">0.027</td><td class="num">0.046</td><td>ms</td></tr>
               <tr><td class="k">Narration — deterministic</td><td class="num">0.002</td><td class="num">0.005</td><td>ms</td></tr>
-              <tr><td class="k">Narration — GenieX / NPU</td><td class="num">—</td><td class="num">—</td><td>ms <span style="color:var(--muted)">on-site</span></td></tr>
-              <tr><td class="k">Snapshot → recommendations</td><td class="num">0.035</td><td class="num">0.058</td><td>ms</td></tr>
+              <tr class="hl"><td class="k">Narration — GenieX on the NPU</td><td class="num">3110</td><td class="num">3273</td><td>ms</td></tr>
+              <tr><td class="k">Snapshot → recommendations</td><td class="num">0.017</td><td class="num">0.019</td><td>ms</td></tr>
               <tr class="hl"><td class="k">Broker messages avoided</td><td class="num">88.7</td><td class="num">—</td><td>%</td></tr>
-              <tr><td class="k">Peak RSS</td><td class="num">32.9</td><td class="num">—</td><td>MB</td></tr>
+              <tr><td class="k">Peak RSS</td><td class="num">34.0</td><td class="num">—</td><td>MB</td></tr>
             </tbody>
           </table>
         </div>
@@ -627,7 +655,7 @@ Power figure source:
   <section class="slide">
     <div class="kicker">Robustness</div>
     <h2>Every tier degrades gracefully — and each fallback is tested</h2>
-    <p class="sub">Built on the assumption that venue Wi-Fi, a model server, and a servo will all
+    <p class="sub">Built on the assumption that venue Wi-Fi, a model server, and a smart plug will all
        fail at the worst possible moment.</p>
     <div class="body">
       <div class="split">
@@ -635,12 +663,12 @@ Power figure source:
           <thead><tr><th>Layer</th><th>Primary</th><th>Tested fallback</th></tr></thead>
           <tbody>
             <tr><td class="k">Network</td><td>venue Wi-Fi</td><td>PC mobile hotspot</td></tr>
-            <tr><td class="k">Sensors</td><td>PIR / LDR / DHT22</td><td><code>simulator.py</code>, scripted</td></tr>
+            <tr><td class="k">Sensors</td><td>Modulino over Qwiic</td><td>browser simulator at <code>/simulator</code></td></tr>
             <tr><td class="k">Transport</td><td>MQTT broker</td><td>REST injection endpoints</td></tr>
-            <tr><td class="k">UNO Q link</td><td>Wi-Fi from Dragonwing</td><td><code>bridge.py</code> over USB</td></tr>
+            <tr><td class="k">UNO Q link</td><td>Wi-Fi from Dragonwing</td><td><code>adb reverse</code> over USB-C — no Wi-Fi at all</td></tr>
             <tr class="hl"><td class="k">Narration</td><td>GenieX on the NPU</td><td>deterministic template — instant</td></tr>
             <tr><td class="k">Cloud report</td><td>Cloud AI 100</td><td>deterministic Python report</td></tr>
-            <tr><td class="k">Actuator</td><td>servo on a real switch</td><td>relay → LED + buzzer</td></tr>
+            <tr><td class="k">Actuator</td><td>Kasa bulb / plug on the LAN</td><td>reports <code>simulated</code> — never fakes success</td></tr>
             <tr><td class="k">Presence</td><td>phone geofence</td><td>manual HOME / AWAY toggle</td></tr>
           </tbody>
         </table>
@@ -651,7 +679,7 @@ Power figure source:
           </div>
           <div class="callout">
             <strong>Nothing hard-fails.</strong> Kill the LLM, the cloud, the broker, the sensors or
-            the servo and the system keeps producing correct recommendations — and says which path
+            the smart plug and the system keeps producing correct recommendations — and says which path
             it used.
           </div>
           <div class="card">
@@ -707,9 +735,9 @@ code/
   dashboard/index.html   no build step
   phone/index.html       no build step
   arduino/
-    sketch/sketch.ino    sensors + <span class="em">servo</span>
-    uno_q_publisher.py   edge filter + <span class="em">commands</span>
-    bridge.py            USB fallback
+    sketch/sketch.ino    <span class="em">Modulino</span> over Qwiic
+    uno_q_publisher.py   edge filter + <span class="em">Kasa actuation</span>
+    board.env            all LAN config, env-driven
   smoke_test.py       <span class="em">32 checks</span>
   requirements.txt    6 deps
   LICENSE             Apache 2.0
@@ -723,33 +751,49 @@ code/
     </div>
   </section>
 
-  <!-- 13 ────────────────────────────────────────── -->
+  <!-- 13 ─────────── DEMO VIDEO ─────────────────── -->
+  <!--
+    The 45-second demo recording. Put demo.mp4 IN THE SAME FOLDER as this file.
+    It is referenced relatively rather than base64-inlined on purpose: inlining a
+    video would bloat this deck from ~400 KB to tens of MB. Copying two files to
+    the USB stick instead of one is the cheaper trade.
+    If the file is missing the slide still renders and says so, rather than
+    showing a broken black box mid-presentation.
+  -->
   <section class="slide">
-    <div class="kicker">Demo · 90 seconds, scripted and reproducible</div>
-    <h2>What you will see, beat by beat</h2>
+    <div class="kicker">Demo · 45 seconds, recorded on the real hardware</div>
+    <h2>Approve once — and a real lamp goes dark</h2>
     <div class="body">
-      <table>
-        <thead><tr><th style="width:70px">t</th><th>What happens</th><th>What the system does</th></tr></thead>
-        <tbody>
-          <tr><td class="num">0 s</td><td>Home, 6:30 PM, TV + A/C + lights, on-peak</td><td><strong>No findings.</strong> Everything running is in use — a system that nags gets ignored</td></tr>
-          <tr><td class="num">15 s</td><td>You leave; the phone crosses the geofence</td><td>presence → <em>away</em>, distance climbs</td></tr>
-          <tr class="hl"><td class="num">25 s</td><td>Motion times out; loads still running</td><td><strong>R2 critical</strong> + <strong>R1 serious</strong> · phone buzzes · audit panel opens</td></tr>
-          <tr class="hl"><td class="num">35 s</td><td><strong>You tap Approve</strong></td><td><strong>The servo flips the switch.</strong> 1340 W → 240 W · saving booked as <strong>realized</strong></td></tr>
-          <tr class="hl"><td class="num">50 s</td><td>Room is now 29 °C; you ask again</td><td><strong>The system refuses</strong> — R7 gates the actuator, with a reason</td></tr>
-          <tr><td class="num">60 s</td><td>Next morning, 640 lux, lights on</td><td><strong>R3</strong> — context fusion a motion sensor cannot do</td></tr>
-          <tr><td class="num">75 s</td><td>Dryer starts at 5 PM</td><td><strong>R6</strong> — charges only the rate delta; shift it to 9 PM</td></tr>
-          <tr><td class="num">85 s</td><td>"Generate weekly deep report"</td><td>Cloud AI 100 → ranked plan, $130 thermostat, 2.4-month payback</td></tr>
-        </tbody>
-      </table>
-      <div class="cols c2" style="margin-top:4px">
-        <div class="callout good">
-          <strong>Everything downstream of the sensors is real</strong> in every fallback mode —
-          real rules, real arithmetic, real LLM, real dashboard, real actuation. Only the sensor
-          feed is ever simulated, and we say so out loud.
+      <div class="split wide-left">
+        <div>
+          <video id="demoVideo" controls preload="metadata" playsinline
+                 style="width:100%;border-radius:10px;border:1px solid rgba(255,255,255,.14);background:#000">
+            <source src="demo.mp4" type="video/mp4">
+          </video>
+          <div id="demoMissing" class="callout warn" style="display:none;margin-top:8px">
+            <strong>demo.mp4 not found next to this file.</strong> Copy it into the same
+            folder as <code>presentation.html</code>, or play it from the desktop and
+            narrate over it.
+          </div>
+          <p class="sub" style="margin-top:6px">Press <kbd>space</kbd> or click to play ·
+             recorded end to end, no cuts.</p>
         </div>
-        <div class="callout">
-          <code>python hub/simulator.py --mode demo</code> replays this exact scenario, printing a
-          caption per beat. <code>--speed 3</code> for rehearsal.
+        <div style="display:flex;flex-direction:column;gap:10px">
+          <div class="callout">
+            <strong>What to watch for, in order</strong>
+            <ol style="margin:6px 0 0 18px;padding:0">
+              <li>Room reads empty, daylight is bright — <strong>R3</strong> fires</li>
+              <li>The card shows the arithmetic, not just a claim</li>
+              <li><strong>Approve</strong> — the lamp physically goes out</li>
+              <li>Its own meter reports <strong>10.8 W → 0.0 W</strong></li>
+              <li>Saving flips from <em>avoidable</em> to <strong>realized</strong></li>
+            </ol>
+          </div>
+          <div class="callout good">
+            <strong>Then the part that matters more.</strong> Turn the dial past 27 °C and ask
+            again — the system returns <strong>HTTP 409</strong> and <strong>refuses</strong>.
+            Nothing switches. That is the machine declining its own advice.
+          </div>
         </div>
       </div>
     </div>
@@ -765,8 +809,9 @@ code/
           <li class="warn"><strong>Load power is modelled, not metered.</strong> Published DOE and
               ENERGY STAR typicals, each carrying its source in the UI. A clamp meter or smart plug
               is the obvious next step.</li>
-          <li class="warn"><strong>Lux is uncalibrated.</strong> A photoresistor divider approximates
-              it, so we use it only against a coarse threshold — and the evidence text says so.</li>
+          <li class="warn"><strong>Lux is not a calibrated measurement.</strong> It comes from the
+              simulator, so we use it only against a coarse threshold — and every card names its
+              source rather than implying a sensor we do not have.</li>
           <li class="warn"><strong>R4 is a heuristic.</strong> We infer an open window from A/C
               runtime, a temperature stall and humidity. We do not sense the window, and the UI
               states that plainly.</li>
@@ -846,13 +891,23 @@ code/
       <strong>AI Home Energy Concierge</strong> — sense, reason, recommend, approve,
       <strong style="color:var(--s1)">act</strong>.
     </p>
-    <div class="meta" style="margin-top:34px">
+    <div class="meta" style="margin-top:30px">
       <span class="pill accent">github.com/gowtham612/ai-home-energy-concierge</span>
       <span class="pill">Apache 2.0</span>
       <span class="pill">32/32 tests</span>
-      <span class="pill">3-command quickstart</span>
+      <span class="pill">2-command quickstart</span>
     </div>
-    <p class="sub" style="margin-top:26px;max-width:70ch">
+
+    <table style="margin-top:26px;max-width:78ch">
+      <tbody>
+        <tr><td class="k">Gowtham Raj Baskaran</td><td><code>gbaskara@qti.qualcomm.com</code></td><td>Implementation — hub, firmware, actuation</td></tr>
+        <tr><td class="k">Nanda Kishore Nagabhushana</td><td><code>nnagabhu@qti.qualcomm.com</code></td><td>Architecture &amp; requirements</td></tr>
+        <tr><td class="k">Yash Joshi</td><td><code>yashjosh@qti.qualcomm.com</code></td><td>On-device AI — GenieX, QUAD profiling</td></tr>
+        <tr><td class="k">Ajay Reddy</td><td><code>areddy@qti.qualcomm.com</code></td><td>Product &amp; demo — energy model, UX</td></tr>
+      </tbody>
+    </table>
+
+    <p class="sub" style="margin-top:20px;max-width:70ch">
       Repo includes the full README with setup from scratch, the benchmark harness, the test
       suite, the MQTT contract, and an operator's manual covering every run path and fallback.
     </p>
@@ -886,10 +941,10 @@ const titles = [
   "Measured performance",
   "Graceful degradation",
   "Engineering & tooling",
-  "Demo, beat by beat",
+  "DEMO VIDEO (45 s)",
   "Honest limitations",
   "Summary — four claims",
-  "Questions"
+  "Team & questions"
 ];
 
 document.getElementById('tot').textContent = slides.length;
@@ -901,7 +956,23 @@ function show(n) {
   document.getElementById('bar').style.width =
     ((idx + 1) / slides.length * 100) + 'vw';
   location.hash = idx + 1;
+
+  // Never let the demo video keep playing behind another slide.
+  const v = document.getElementById('demoVideo');
+  if (v && !v.paused && !slides[idx].contains(v)) v.pause();
 }
+
+// If demo.mp4 is not sitting next to this file, say so on the slide instead of
+// showing a silent black rectangle in front of the judges.
+(function () {
+  const v = document.getElementById('demoVideo');
+  const warn = document.getElementById('demoMissing');
+  if (!v || !warn) return;
+  v.addEventListener('error', () => {
+    v.style.display = 'none';
+    warn.style.display = 'block';
+  }, true);
+})();
 
 function toggleOverview(force) {
   const ov = document.getElementById('ov');

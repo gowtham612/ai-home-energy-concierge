@@ -63,6 +63,22 @@ the guardrail · measured performance · graceful degradation · tooling · demo
 limitations · summary.
 
 To rebuild after replacing a screenshot: `python build_presentation.py`.
+**Edit `presentation_template.html`, never `presentation.html`** — the latter is generated
+and your changes would be overwritten on the next build.
+
+### The demo video
+
+We get **5 minutes**, so the demo is a **~45 s recording** rather than a live run. Slide 13
+plays it.
+
+- Drop the file in as **`demo.mp4`, in the same folder as `presentation.html`.**
+- It is referenced relatively, *not* base64-inlined — inlining would take the deck from
+  ~400 KB to tens of MB. Copy both files to the USB stick.
+- If the file is missing the slide still renders and says so, rather than showing a black
+  rectangle in front of the judges.
+
+A **5-minute run sheet** (which seven slides to show, in what order, with timings) is in
+the comment block at the top of `presentation_template.html`.
 
 ## What the organizer documents changed
 
