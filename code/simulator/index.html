@@ -551,7 +551,19 @@
     }catch(e){ setConn("poll"); startPolling(); return; }
     ws.onopen = function(){ wsRetry = 0; setConn("ws"); log("websocket connected", "okc"); };
     ws.onmessage = function(ev){
-      try{ renderState(JSON.parse(ev.data)); }catch(e){}
+      try{
+        var msg = JSON.parse(ev.data);
+        // The hub WRAPS websocket pushes as {type, data}, but /api/state returns
+        // the state bare. Passing the wrapper straight to renderState made
+        // s.recos undefined, so every push blanked the panel to "No active
+        // recommendations" and the 2 s poll then restored it - which is exactly
+        // what the flickering was. Accept both shapes.
+        if(!msg) return;
+        // {type:"reco"} carries ONE recommendation, not a state snapshot.
+        // Rendering it would blank everything else; the next state push has it.
+        if(msg.type === "reco") return;
+        renderState(msg.data ? msg.data : msg);
+      }catch(e){}
     };
     ws.onclose = function(){
       if(!connected) return;
@@ -564,8 +576,35 @@
   }
 
   // ---------- render ----------
+  // Signature of just the things renderState actually draws. Deliberately
+  // EXCLUDES s.now and every ts field, which change on every push and would
+  // make the comparison always differ. Without this the websocket and the 2 s
+  // poll both rebuild the recommendation list via innerHTML several times a
+  // second, which reads as flicker and loses any text selection mid-demo.
+  var lastSig = null;
+  function stateSig(s){
+    var p = [];
+    (s.recos || s.recommendations || []).forEach(function(r){
+      p.push(r.id, r.severity, r.title, r.body, r.usd, r.kwh);
+    });
+    var L = s.loads || {};
+    Object.keys(L).sort().forEach(function(k){
+      p.push(k, L[k].state, L[k].watts, L[k].metered, L[k].src);
+    });
+    var rm = (s.rooms || {})[ROOM] || {};
+    p.push(rm.temp_c, rm.lux, rm.occupancy, rm.humidity, rm.temp_src, rm.lux_src);
+    p.push(s.user && s.user.presence);
+    var rz = s.realized;
+    p.push(rz && typeof rz === "object" ? rz.usd : rz);
+    return p.join("|");
+  }
+
   function renderState(s){
     if(!s || typeof s !== "object") return;
+
+    var sig = stateSig(s);
+    if(sig === lastSig) return;    // nothing we draw has changed
+    lastSig = sig;
 
     // recommendations
     var recos = s.recos || s.recommendations || [];
