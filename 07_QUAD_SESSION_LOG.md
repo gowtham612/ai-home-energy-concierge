@@ -559,7 +559,7 @@ likely just report "NPU unavailable," honest but not useful evidence.
 |---|---|---|
 | Board SSH password | `QUAD-Client-main\.env_boards` → `UNOQ_SSH_PASSWORD` | gitignored, also doubles as the sudo password on this board |
 | Board sudo password | same as above | confirmed same value as SSH login |
-| AI Hub Models token | `QUAD-Client-main\.env` → `QAI_HUB_API_KEY` / `QAI_HUB_API_TOKEN` | pasted into chat once by the user — consider rotating at app.aihub.qualcomm.com if that matters to you |
+| AI Hub Models token | `QUAD-Client-main\.env` → `QAI_HUB_API_KEY` / `QAI_HUB_API_TOKEN` | obtain from app.aihub.qualcomm.com → Account → API token |
 | QUAD MCP bearer token | `QUAD-Client-main\.env` → `QUAD_MCP_TOKEN` | also in `.claude/settings.json` via `${env:...}` |
 | Venue Wi-Fi / laptop login | `04_ORGANIZER_REQUIREMENTS.md` §E (in **this public repo**) | flagged in `CLEANUP_REMINDER.md`, redaction is your call |
 
