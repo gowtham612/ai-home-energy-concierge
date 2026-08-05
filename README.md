@@ -22,9 +22,23 @@ Event: Snapdragon Multiverse 2026 · Mon Aug 3 – Fri Aug 7 · submit Fri **1:0
 | **`presentation.html`** | **the deck** — open in any browser, arrow keys to navigate | Thursday / demo |
 | **`code/`** | Working, tested backbone | Day 1 |
 
+## Team
+
+| Name | Email | Role |
+|---|---|---|
+| Gowtham Raj Baskaran | gbaskara@qti.qualcomm.com | Joint concept & design · implementation lead |
+| Nanda Kishore Nagabhushana | nnagabhu@qti.qualcomm.com | Joint concept & design · project proposal |
+| Yash Joshi | yashjosh@qti.qualcomm.com | Joint concept & design |
+| Ajay Reddy | areddy@qti.qualcomm.com | Joint concept & design |
+
+All four members developed the concept, architecture and requirements together;
+Gowtham led the implementation. Same table appears in `code/README.md` — this copy is
+here because it is a hard eligibility requirement and the repository root is the first
+page a reader lands on.
+
 ## Live repository
 
-**https://github.com/gowtham612/ai-home-energy-concierge** — public, Apache 2.0, 32 files.
+**https://github.com/gowtham612/ai-home-energy-concierge** — public, Apache 2.0.
 Verified: a fresh `git clone` passes 32/32 smoke checks with no manual fixes.
 
 Submit that URL via the organizers' Microsoft Form by **Friday 12:00 PM** (target 10:30).

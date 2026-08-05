@@ -576,18 +576,27 @@ code/
   default path. QNN/Hexagon acceleration is the natural next step; we did not want to
   claim a number we had not measured.
 
-## Team
+## Submission
 
-> **REQUIRED BEFORE SUBMISSION** — the organizers require the name *and email* of every
-> team member. Replace this table; do not submit with placeholders.
+**Repository:** <https://github.com/gowtham612/ai-home-energy-concierge> — public, Apache 2.0.
+
+This is the repository submitted via the organizers' Microsoft Form. The application
+lives in `code/`; this file is its README (description, setup, usage). The repository
+root additionally carries the planning packet and the presentation deck.
+
+## Team
 
 | Name | Email | Role |
 |---|---|---|
-| Gowtham Raj Baskaran | gbaskara@qti.qualcomm.com | Hub / AI orchestration |
-| *&lt;name&gt;* | *&lt;email&gt;* | Embedded / UNO Q |
-| *&lt;name&gt;* | *&lt;email&gt;* | Mobile / PWA |
-| *&lt;name&gt;* | *&lt;email&gt;* | Front-end / documentation |
-| *&lt;name&gt;* | *&lt;email&gt;* | Cloud / validation |
+| Gowtham Raj Baskaran | gbaskara@qti.qualcomm.com | Joint concept & design · implementation lead |
+| Nanda Kishore Nagabhushana | nnagabhu@qti.qualcomm.com | Joint concept & design · project proposal |
+| Yash Joshi | yashjosh@qti.qualcomm.com | Joint concept & design |
+| Ajay Reddy | areddy@qti.qualcomm.com | Joint concept & design |
+
+All four members developed the concept, architecture and requirements together.
+Gowtham led the implementation — the hub and rules engine, the UNO Q firmware, the
+Kasa actuation path and the on-device AI integration — and is the best first point of
+contact for questions about the code.
 
 Project proposal submitted by Nanda Kishore Nagabhushana.
 

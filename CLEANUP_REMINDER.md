@@ -65,13 +65,19 @@ git push
 
 ## Also still outstanding for the submission
 
-Independent of this cleanup decision, `code/README.md` still needs:
+Independent of this cleanup decision:
 
-- [ ] **Four team members' names and emails** — currently `<name>` / `<email>`
-      placeholders. This is a **hard submission requirement** (organizer deck p.7).
-- [ ] The GenieX/NPU row in the benchmark table, once `geniex serve` has run on the
-      Copilot+ PC
-- [ ] The `/quad-profile` report pasted in, once you have been to a QUAD support session
+- [x] **Team members' names and emails** — DONE. All four are listed with emails in
+      both `code/README.md` § Team and the root `README.md` § Team.
+- [x] The GenieX/NPU row in the benchmark table — DONE. Measured with `geniex serve`
+      running the `qairt` W4A16 runtime on the X-Elite NPU: narration p50 3110 ms,
+      p95 3273 ms, peak RSS 34.0 MB.
+- [ ] The `/quad-profile` report — **blocked server-side**, not by us. Two independent
+      failures on the hosted QUAD MCP server (broken `qairt-converter`, missing
+      ExecuTorch toolchain); see `code/README.md` and `07_QUAD_SESSION_LOG.md` §10.
+      The GenieX row above already provides real measured NPU numbers.
+
+**So the redaction decision at the top of this file is now the only open item here.**
 
 And every team member must submit the **feedback form** by Friday noon — it gates prize
 eligibility.

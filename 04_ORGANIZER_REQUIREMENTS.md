@@ -12,7 +12,7 @@ Distilled from **`Snapdragon Multiverse Hackathon_Internal.pdf`** (orientation, 
 | ☐ | **All code open source** | p.7 | stated in `README.md` § License |
 | ☐ | **Open-source license file** | p.7 | `code/LICENSE` (Apache 2.0) ✅ *in packet* |
 | ☐ | README: **application description** | p.7 | `README.md` top ✅ |
-| ☐ | README: **names AND emails of every member** | p.7 | `README.md` § Team — **table has placeholders, fill it** |
+| ☑ | README: **names AND emails of every member** | p.7 | **DONE** — all 4 members with emails, in both `code/README.md` § Team and the root `README.md` § Team |
 | ☐ | README: **setup instructions from scratch, incl. dependencies** | p.7 | `README.md` § Setup ✅ |
 | ☐ | README: **run and usage instructions** | p.7 | `README.md` § Usage ✅ |
 | ☐ | **App runnable from our own instructions** | p.7 | verify by stranger test Thursday |
