@@ -29,3 +29,7 @@ code/hub_server*.log
 # Demo recording lives next to presentation.html but is not committed by default
 # (large binary). Remove this line if you want it in the repo for submission.
 demo.mp4
+
+# local run logs
+code/*.err
+code/arduino/pc.env

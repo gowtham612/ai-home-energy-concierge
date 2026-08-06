@@ -85,10 +85,34 @@ class StateStore:
             })
 
     def record_actuation(self, load_key: str, payload: Dict) -> None:
-        """Store a physical-action confirmation from the UNO Q."""
+        """Store a physical-action confirmation from the UNO Q.
+
+        If the confirmation says the action FAILED, un-book the saving. api_apply
+        books optimistically the moment the command is published, which is what
+        keeps the dashboard responsive — but a command that was published and then
+        refused by the hardware has saved nothing. Leaving it booked would show
+        "you saved $0.02" for a lamp still burning, which is precisely the kind of
+        claim this project refuses to make elsewhere.
+
+        `ok=False` means a real device was addressed and did not comply
+        (source `kasa_error`). A declared simulation (`source="simulated"`,
+        `ok=True`) is a legitimate labelled path and stays booked.
+        """
         with self.lock:
             self.actuations.append({"load_key": load_key, **payload})
             self.actuations = self.actuations[-40:]
+
+            if payload.get("ok") is not False:
+                return
+            reco_id = payload.get("reco_id")
+            if not reco_id or reco_id not in self.applied_ids:
+                return
+            before = len(self.realized)
+            self.realized = [r for r in self.realized if r["reco_id"] != reco_id]
+            self.applied_ids.discard(reco_id)
+            if before != len(self.realized):
+                print(f"[actuation] UN-BOOKED {reco_id}: {load_key} reported "
+                      f"ok=false via {payload.get('source')} — saving not realized")
 
     def realized_totals(self) -> Dict:
         with self.lock:
@@ -170,6 +194,26 @@ class StateStore:
                 "now": time.time() + self.sim_clock_offset,
             }
 
+    def latest_recos(self, limit: int = 12) -> List["Recommendation"]:
+        """Newest-first, one card per finding id.
+
+        STORE.recos is an append-only history: RECO_COOLDOWN_S throttles how often
+        a finding is re-narrated, but once it lapses the SAME id is appended again.
+        Rendering the raw tail therefore showed the same recommendation as three
+        separate cards. Keep the history intact for the audit trail; collapse it
+        here so each distinct finding surfaces once, with its most recent wording.
+        """
+        with self.lock:
+            seen, out = set(), []
+            for rec in reversed(self.recos):
+                if rec.id in seen:
+                    continue
+                seen.add(rec.id)
+                out.append(rec)
+                if len(out) >= limit:
+                    break
+            return out
+
     def public_state(self) -> Dict:
         snap = self.snapshot()
         now_dt = datetime.fromtimestamp(snap["now"])
@@ -181,7 +225,7 @@ class StateStore:
             "tariff": {"rate": rate, "period": period,
                        "clock": now_dt.strftime("%H:%M")},
             "mqtt_connected": self.mqtt_connected,
-            "recos": [r.to_dict() for r in self.recos[-12:]][::-1],
+            "recos": [r.to_dict() for r in self.latest_recos(12)],
             "applied_ids": sorted(self.applied_ids),
             "realized": self.realized_totals(),
             "actuations": self.actuations[-8:][::-1],
@@ -406,7 +450,7 @@ async def api_state():
 
 @app.get("/api/recos")
 async def api_recos():
-    return JSONResponse([r.to_dict() for r in STORE.recos[-25:]][::-1])
+    return JSONResponse([r.to_dict() for r in STORE.latest_recos(25)])
 
 
 @app.post("/api/presence")

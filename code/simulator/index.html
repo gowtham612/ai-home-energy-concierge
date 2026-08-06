@@ -165,6 +165,7 @@
     overflow-x:auto; white-space:pre-wrap;
   }
   .actions{display:flex; gap:8px; margin-top:10px; flex-wrap:wrap}
+  .reco-advice{margin-top:8px; font-size:12px; color:var(--muted,#8a8a8a)}
   .apply{background:var(--sim); color:var(--ink); font-weight:700; border:0;
          padding:8px 16px; border-radius:8px; font-size:13.5px}
   .apply.off{background:var(--amber)}
@@ -423,9 +424,22 @@
     }, immediate?0:220);
   }
 
+  // Loads the hub reports as metered are driven by a REAL Kasa device: the
+  // publisher re-publishes their true state every KASA_POLL_S (5 s). Posting a
+  // simulated value for one is not just useless, it is actively misleading — the
+  // simulator would show "on / 12 W" for up to 5 s while the bulb sat dark at
+  // 0 W, which is exactly the divergence seen on the dashboard. Let the device
+  // be the truth and say so, rather than racing it.
+  var meteredLoads = {};
+
   function sendLoad(name){
     if(!requireHub()) return;
     var l = loadsSim[name];
+    if(meteredLoads[name]){
+      log("load "+name+" is a REAL metered device — simulator will not override it; "
+          + "use Approve on a recommendation to switch it", "amb");
+      return;
+    }
     post("/api/load", { key:ROOM+"/"+name, state:l.state, watts:+l.watts })
       .then(function(r){
         log("load "+name+" -> "+l.state+" ("+l.watts+" W)"+(r.ok?"":"  HTTP "+r.status), r.ok?null:"err");
@@ -614,7 +628,14 @@
     } else {
       box.innerHTML = recos.map(function(r){
         var sev = (r.severity||"info").toLowerCase();
-        var actions = (r.actions && r.actions.length ? r.actions : ["off"]);
+        // r.actions are HUMAN-READABLE suggestions ("Turn off the ac", "Link HVAC
+        // to geofence"). They are NOT API verbs. /api/apply takes action:"on"|"off"
+        // and derives which load to switch from the RULE, so every one of those
+        // strings maps to the same single operation. Sending them straight through
+        // produced "action must be 'on' or 'off'" -> HTTP 400 on every approval,
+        // and rendering one button each implied the system could "link HVAC to
+        // geofence", which it cannot. Show them as advice; offer ONE real button.
+        var advice = (r.actions && r.actions.length ? r.actions : []);
         var stats = [];
         if(r.kwh != null)   stats.push("<span><b>"+esc(r.kwh)+"</b> kWh</span>");
         if(r.usd != null)   stats.push("<span>$<b>"+esc(r.usd)+"</b></span>");
@@ -625,9 +646,12 @@
           + (r.body ? '<div class="reco-body">'+esc(r.body)+'</div>' : "")
           + (stats.length ? '<div class="reco-stats">'+stats.join("")+'</div>' : "")
           + (r.formula ? '<details class="formula"><summary>audit formula — Python computed this, not the LLM</summary><pre>'+esc(r.formula)+'</pre></details>' : "")
-          + '<div class="actions">'+ actions.map(function(a){
-              return '<button class="apply '+(a==="off"?"off":"")+'" data-reco="'+esc(r.id)+'" data-action="'+esc(a)+'">Approve: switch '+esc(a)+'</button>';
-            }).join("") +'</div>'
+          + (advice.length ? '<div class="reco-advice">suggested: '+advice.map(esc).join(" · ")+'</div>' : "")
+          + '<div class="actions">'
+          +   '<button class="apply off" data-reco="'+esc(r.id)+'" data-action="off">'
+          +     'Approve — switch off' + (r.load_key ? ' ' + esc(r.load_key) : '')
+          +   '</button>'
+          + '</div>'
           + '</div>';
       }).join("");
     }
@@ -638,9 +662,17 @@
       var el = $("real-"+name); if(!el) return;
       var l = loads[ROOM+"/"+name] || (loads[ROOM] && loads[ROOM][name]);
       if(l && typeof l === "object"){
-        var src = l.source || l.src || "";
-        el.innerHTML = "hub sees: <b>"+esc(l.state||"?")+"</b>"+(src?" · "+esc(src):"");
-      } else el.textContent = "";
+        // The hub sends `metered` (bool), not `source`/`src` — those were read
+        // here for a key that never arrives, so provenance never rendered.
+        meteredLoads[name] = !!l.metered;
+        var w = (typeof l.watts === "number") ? l.watts.toFixed(1)+" W" : "";
+        el.innerHTML = "hub sees: <b>"+esc(l.state||"?")+"</b>"
+          + (w ? " · "+esc(w) : "")
+          + (l.metered ? ' · <b style="color:var(--ok)">real device</b>'
+                       : ' · <span style="color:var(--muted)">simulated</span>');
+        var row = el.closest ? el.closest(".load-row") : null;
+        if(row) row.style.opacity = l.metered ? "0.72" : "";
+      } else { el.textContent = ""; meteredLoads[name] = false; }
     });
 
     // status strip
