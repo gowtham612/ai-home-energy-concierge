@@ -34,7 +34,24 @@ LLM_BASE_URL = os.environ.get("LLM_BASE_URL", "http://127.0.0.1:18181/v1")
 LLM_MODEL = os.environ.get("LLM_MODEL", "ai-hub-models/Qwen3-4B-Instruct-2507")
 LLM_API_KEY = os.environ.get("LLM_API_KEY", "")
 LLM_ENABLED = os.environ.get("LLM_ENABLED", "1") not in ("0", "false", "False")
-LLM_TIMEOUT_S = 8
+
+# Measured on this machine's GenieX / Qwen3-4B W4A16 on the Hexagon NPU:
+# latency tracks OUTPUT LENGTH, steeply.
+#
+#     135 chars ->  2.6 s        378 chars ->  5.5 s
+#    1060 chars -> 11.4 s       ~600 tokens -> ~135 s
+#
+# The old settings (max_tokens=300, no brevity instruction) let the model ramble
+# to ~1060 chars, so every narration took ~11.4 s and blew the 8 s timeout — it
+# fell back to the template EVERY time, silently. The NPU was never actually
+# narrating anything, while README quoted 3110 ms.
+#
+# So: cap the output and ask for brevity, which is what actually buys the
+# latency, and give the timeout real headroom (~3x the p50) so a slow call
+# completes instead of being abandoned mid-generation. The template fallback is
+# unchanged and still catches a genuinely dead endpoint.
+LLM_TIMEOUT_S = int(os.environ.get("LLM_TIMEOUT_S", "20"))
+LLM_MAX_TOKENS = int(os.environ.get("LLM_MAX_TOKENS", "160"))
 
 MAX_TITLE_CHARS = 60
 MAX_ACTIONS = 3
@@ -82,7 +99,12 @@ Reply with a single JSON object and nothing else:
 {"title": "<max 60 chars>", "body": "<at most 2 sentences, second person, friendly>", \
 "actions": ["<imperative, under 8 words>", ...]}
 
-At most 3 actions. No markdown, no code fences, no commentary outside the JSON."""
+At most 3 actions. No markdown, no code fences, no commentary outside the JSON.
+
+BE BRIEF. Keep the whole reply under 350 characters. Output length, not model \
+size, is what makes this slow on the NPU that generates it, so every extra word \
+costs real latency. Body: at most 2 short sentences. Do not repeat a number you \
+were given more than once."""
 
 
 def _user_prompt(finding) -> str:
@@ -135,7 +157,7 @@ class LLMClient:
                 {"role": "user", "content": user},
             ],
             "temperature": 0.4,
-            "max_tokens": 300,
+            "max_tokens": LLM_MAX_TOKENS,
         }
         resp = requests.post(f"{self.base_url}/chat/completions", headers=headers,
                              json=payload, timeout=self.timeout)
