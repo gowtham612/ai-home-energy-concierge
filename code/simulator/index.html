@@ -361,6 +361,9 @@
   var occChangedAt = Date.now(), presChangedAt = Date.now();
   var ws = null, pollTimer = null, wsRetry = 0;
   var connected = false, warnedNoHub = false;
+  // wsAnnounced: the "connected" line is printed once per page load.
+  // wsDropped:   one line per real outage, not one per retry attempt.
+  var wsAnnounced = false, wsDropped = false;
 
   var $ = function(id){ return document.getElementById(id); };
   function esc(s){ return String(s==null?"":s).replace(/[&<>"']/g,function(c){
@@ -559,11 +562,36 @@
   }
 
   function connectWS(){
-    try{ if(ws) ws.close(); }catch(e){}
+    // Detach the old socket's handlers BEFORE closing it. Closing a socket
+    // fires its own onclose, which schedules another connectWS() — so the
+    // previous version made every reconnect spawn the next one, and because
+    // onopen resets wsRetry to 0 the backoff never grew past ~1 s. A single
+    // network blip turned into a permanent 1 Hz reconnect loop, which is what
+    // was flooding the log with "websocket connected".
+    if(ws){
+      try{
+        ws.onopen = ws.onmessage = ws.onclose = ws.onerror = null;
+        ws.close();
+      }catch(e){}
+      ws = null;
+    }
     try{
       ws = new WebSocket(wsUrl());
     }catch(e){ setConn("poll"); startPolling(); return; }
-    ws.onopen = function(){ wsRetry = 0; setConn("ws"); log("websocket connected", "okc"); };
+    ws.onopen = function(){
+      wsRetry = 0;
+      setConn("ws");
+      // Announce once. A healthy socket should be silent; the connection
+      // indicator already shows live status. Only genuine transitions get a
+      // line, so anything in this log is worth reading.
+      if(!wsAnnounced){
+        wsAnnounced = true;
+        log("websocket connected", "okc");
+      } else if(wsDropped){
+        wsDropped = false;
+        log("websocket reconnected", "okc");
+      }
+    };
     ws.onmessage = function(ev){
       try{
         var msg = JSON.parse(ev.data);
@@ -582,6 +610,13 @@
     ws.onclose = function(){
       if(!connected) return;
       setConn("poll");
+      // Report the DROP, not each retry. One line per real outage rather than
+      // one per attempt — and losing the push channel is worth knowing about,
+      // so this stays loud while the reconnects stay quiet.
+      if(!wsDropped){
+        wsDropped = true;
+        log("websocket dropped — polling every 2s while it retries", "amb");
+      }
       var wait = Math.min(15000, 1000*Math.pow(2, wsRetry++));
       setTimeout(function(){ if(connected) connectWS(); }, wait);
     };

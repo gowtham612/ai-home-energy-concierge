@@ -184,6 +184,9 @@
   th { color: var(--text-muted); font-weight: 500; font-size: 11px; }
   td { color: var(--text-secondary); font-variant-numeric: tabular-nums; }
   td.name { color: var(--text-primary); font-variant-numeric: normal; }
+  .prov { font-weight: 600; letter-spacing: .02em; }
+  .prov.real { color: #55c17a; }
+  .prov.sim  { color: #8b98a9; }
   .hidden { display: none; }
 
   .empty { color: var(--text-muted); font-size: 13px; padding: 22px 4px; }
@@ -503,9 +506,19 @@ function drawStateTable() {
       <td>${r.occupancy ? "occupied" : "empty"}</td><td>—</td>
       <td>${(r.temp_c ?? 0).toFixed(1)}°C · ${r.humidity ?? 0}% RH · ${r.lux ?? 0} lux</td></tr>`);
   }
+  // Real Kasa devices and simulated loads share this table, which is correct —
+  // but they used to render identically, with a literal "—" in the Detail
+  // column, so nothing on screen said which numbers came from a device and
+  // which from the modelled table in energy_model.py. The hub has always sent
+  // `metered`; the dashboard simply never read it. On a project whose whole
+  // pitch is "auditable, not magic", that is the one distinction that must not
+  // be left to the reader's assumption.
   for (const [key, l] of Object.entries(STATE.loads ?? {})) {
+    const detail = l.metered
+      ? `<span class="prov real">real device</span> · measured`
+      : `<span class="prov sim">simulated</span> · modelled`;
     rows.push(`<tr><td class="name">${key}</td><td>${l.state}</td>
-      <td>${Math.round(l.watts ?? 0)} W</td><td>—</td></tr>`);
+      <td>${Math.round(l.watts ?? 0)} W</td><td>${detail}</td></tr>`);
   }
   const u = STATE.user ?? {};
   rows.push(`<tr><td class="name">phone (user)</td><td>${u.presence ?? "?"}</td><td>—</td>
