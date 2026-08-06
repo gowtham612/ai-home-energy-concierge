@@ -88,7 +88,8 @@ def _digest_lines(state: Dict) -> Tuple[str, Dict[str, str]]:
                      f"at {tariff.get('clock','')}")
     # Both rates, so "what if I move it to 9 PM?" can be answered from the digest
     # instead of the model reasoning that the off-peak figure "is not specified".
-    for k in ("on_peak_rate", "off_peak_rate", "co2_kg_per_kwh"):
+    for k in ("on_peak_rate", "off_peak_rate", "super_off_peak_rate",
+              "co2_kg_per_kwh"):
         if d.get(k) is not None:
             allowed[k] = f"{d[k]}"
             lines.append(f"{k.upper()}: {d[k]}")
