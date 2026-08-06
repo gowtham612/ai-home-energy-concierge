@@ -69,6 +69,12 @@ class StateStore:
         # Tier-2 plan, when AI_PLAN=1. Empty dict = no plan this cycle,
         # which the UI renders as the plain ranked list it always had.
         self.plan: Dict = {}
+        # Autonomous-demo cue. The autopilot posts a control change here and the
+        # simulator page applies it to its OWN widget, so a scripted run drives the
+        # visible UI rather than quietly POSTing behind it. Monotonic id: the page
+        # acts only on a cue it has not seen, so a re-render never replays one.
+        self.demo_cue: Dict = {}
+        self._demo_cue_seq = 0
         self.lock = threading.Lock()
 
     # -- actuation ---------------------------------------------------------
@@ -231,6 +237,7 @@ class StateStore:
             "mqtt_connected": self.mqtt_connected,
             "recos": [r.to_dict() for r in self.latest_recos(12)],
             "plan": self.plan,
+            "demo_cue": self.demo_cue,
             "applied_ids": sorted(self.applied_ids),
             "realized": self.realized_totals(),
             "actuations": self.actuations[-8:][::-1],
@@ -454,6 +461,29 @@ async def ask_page():
         return JSONResponse({"error": "Q&A disabled; start the hub with AI_ASK=1"},
                             status_code=404)
     return FileResponse(ASK_DIR / "index.html")
+
+
+@app.post("/api/demo/cue")
+async def api_demo_cue(request: Request):
+    """Ask the simulator page to move one of its own controls.
+
+    Used by tools/demo_autopilot.py. The point is that a scripted demo should be
+    visible: driving the hub directly would change the numbers while the
+    simulator's switches sat still, which looks like the UI is broken rather
+    than like the demo is running.
+    """
+    body = await request.json()
+    control = str(body.get("control", "")).strip()
+    if control not in ("presence", "occupancy", "lux", "humidity", "temp_c"):
+        return JSONResponse({"error": f"unknown control {control!r}"}, status_code=400)
+    with STORE.lock:
+        STORE._demo_cue_seq += 1
+        STORE.demo_cue = {"id": STORE._demo_cue_seq, "control": control,
+                          "value": body.get("value"),
+                          "note": str(body.get("note", ""))[:120],
+                          "ts": time.time()}
+    await broadcast({"type": "state", "data": STORE.public_state()})
+    return JSONResponse({"ok": True, "cue": STORE.demo_cue})
 
 
 @app.get("/api/ask/suggestions")
