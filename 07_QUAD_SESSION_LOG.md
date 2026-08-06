@@ -889,3 +889,99 @@ Visible and known-good: `Hydra`, `Qguest`, `HaQathon`.
 
 Until then the loop still closes end-to-end and degrades **honestly**:
 `source=kasa_error, ok=false`, and — as of §16.2 — no saving is claimed.
+
+---
+
+# §17 Modulino Buttons as a Kasa debug path + Risk V-2 SETTLED (2026-08-05)
+
+A Modulino Buttons node was daisy-chained off the Knob. Asked for: two buttons
+that directly toggle the bulb and the heater, as a hardware check that the Kasa
+path works through the UNO Q without the browser in the way.
+
+## 17.1 ⭐ Risk V-2 is settled: host -> MCU serial WORKS
+
+Open since the first bring-up and the reason `MCU_ACCEPTS_COMMANDS` shipped as
+`0`: nobody had verified the UNO Q's Bridge/RPC path delivers **Linux -> MCU**
+bytes at all. It does. Writing to the same `tcp://127.0.0.1:7500` monitor socket
+that carries telemetry the other way:
+
+```
+--> CMD lights on ok
+<-- {"ack":"lights","state":"on","ok":true,"via":"pixels"}
+```
+
+`MCU_ACCEPTS_COMMANDS` is now **1**. This is what lets the button LEDs show what
+the *device reported* rather than what was *asked for* — for a debug tool the
+difference is the whole point.
+
+## 17.2 Button map
+
+| Button | Action | LED |
+|---|---|---|
+| **A** | toggle Kasa bulb (`lights`) | LED0 = bulb **confirmed** on |
+| **B** | toggle Kasa plug (`ac` / heater) | LED1 = plug **confirmed** on |
+| **C** | rescan the Qwiic bus (hot-plug) | LED2 = last action failed / never confirmed |
+
+Chirps: 660 Hz = press taken, awaiting device · 880 = confirmed on ·
+440 = confirmed off · 196 = failed, or no confirmation within `ACK_TIMEOUT_MS`
+(6 s).
+
+Occupancy override moved off button A to the simulator UI, alongside the other
+declared-simulation inputs.
+
+## 17.3 Why counters, not edges
+
+The MCU cannot reach a Kasa device — it has no network. So a press bumps a
+monotonic counter (`bl`, `ba`) carried in every telemetry line;
+`uno_q_publisher.py`'s new `ButtonWatch` acts on the **delta** since the line it
+last saw, then writes `CMD <load> <on|off> <ok|fail>` back.
+
+A delta survives what an edge flag does not:
+
+- **dropped line** — the count still climbs, the press is not lost
+- **duplicate line** — no change, so no double-switch
+- **publisher restart** — first sight BASELINES only; without this every press
+  since MCU boot would replay on each restart
+- **MCU reflash** — counter resets to 0, i.e. *decreases*; treated as a reboot
+  and re-baselined rather than actuated (a real wrap needs 65535 presses)
+
+Seven cases unit-tested offline (baseline / single / repeat / even delta / odd
+delta / reset / unbound) — all pass.
+
+## 17.4 A bug this shook out
+
+`KasaBank.toggle()` first read current state via `poll()` and returned
+`"unbound"` when that came back empty. But TP-Link firmware **serves one
+connection at a time**, so the publisher's own 5 s sweep (or the phone app) can
+lock a read out for a moment — and a bulb sitting right there got reported as
+*"no Kasa device bound"*. Caught live: toggle 1 succeeded, toggle 2 said
+`unbound` with the bulb plainly connected.
+
+`self.devices` is the authority on binding; a failed poll is not. Now: retry
+once, then report `kasa_error`, which is a different claim and gets a different
+log line. The distinction reaches the MCU too.
+
+## 17.5 Verified end to end
+
+| Link | How | Result |
+|---|---|---|
+| Buttons node enumerates | `"nodes":"KB"` in telemetry | ✅ |
+| Press -> counter | `"bl":0,"ba":0` present and live | ✅ |
+| Counter -> toggle logic | 7 offline unit cases | ✅ |
+| Toggle -> real bulb | `toggle('lights')` twice on the board | ✅ physically switched, `ok=True source=kasa` |
+| Publisher -> MCU LED | `CMD` write, MCU acked | ✅ |
+| Contention handling | concurrent poll + write | ✅ "write reported KasaException but the device IS off — trusting the device" |
+
+**Only the physical press itself is unverified** — that needs a finger on the
+button. Everything it depends on is proven.
+
+## 17.6 Network note
+
+ArtiFi came back mid-session; board is on `172.20.10.8`, bulb bound at
+`172.20.10.7` (1.7 W, metered). The heater plug at `172.20.10.5` is still
+**unprovisioned** — it was broadcasting its own `TP-LINK_Smart Plug_26B1` setup
+AP. Until it is paired, **button B will chirp low and light the error LED**,
+which is the correct honest answer, not a fault in the button path.
+
+The hotspot is flaky: restoring the bulb took three discovery attempts before
+one answered. Worth knowing before blaming code on demo day.

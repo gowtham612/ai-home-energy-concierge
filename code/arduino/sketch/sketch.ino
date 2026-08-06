@@ -62,11 +62,23 @@
 #define USE_MOVEMENT  0   // an IMU senses the NODE being jostled, not room
                           // occupancy. Deliberately off - see the README note.
 
-/* Actuation lives on the network (Kasa smart bulb/plug, driven from the Linux
- * side), so the MCU does not need to receive commands. The reader is kept
- * behind this flag because it is unverified whether the UNO Q's Bridge/RPC
- * Serial path delivers host->MCU bytes at all. Flip to 1 only after testing. */
-#define MCU_ACCEPTS_COMMANDS 0
+/* Actuation still lives on the network (Kasa smart bulb/plug, switched from the
+ * Linux side) — the MCU cannot reach a Kasa device itself. What this flag now
+ * enables is the RETURN channel: after the publisher has switched a device it
+ * sends `CMD <load> <on|off> <ok|fail>` back, and the MCU lights the matching
+ * button LED. Without it the LEDs could only show what was *asked for*, which
+ * for a debug tool is worse than useless — it would show a lit LED for a bulb
+ * that never came on.
+ *
+ * This is the host->MCU direction that was never verified (Risk V-2). If it
+ * does not work, every press ends in the ACK_TIMEOUT_MS buzz below and the
+ * LEDs stay dark — a clean negative result rather than a silent lie. */
+#define MCU_ACCEPTS_COMMANDS 1
+
+/* Buttons A and B directly toggle the two Kasa loads, as a hardware debug path
+ * independent of the browser UI: press -> counter in telemetry -> publisher
+ * switches the real device -> CMD comes back -> LED. */
+#define BUTTON_ACTUATION 1
 
 #include <Arduino_Modulino.h>
 
@@ -144,9 +156,27 @@ const char *humSrc  = "none";
 const char *luxSrc  = "none";
 const char *occSrc  = "none";
 
-/* Local load mirror, only meaningful if a Pixels node is attached. The real
- * loads are Kasa devices switched from the Linux side. */
+/* Local load mirror. Driven ONLY by a CMD confirmation from the Linux side, so
+ * it reflects what the Kasa device actually reported — never what was asked. */
 bool lightsOn = false, acOn = false;
+
+#if BUTTON_ACTUATION
+/* Monotonic press counters, published in every telemetry line. The publisher
+ * acts on the DIFFERENCE since the line it last saw, which makes the path
+ * immune to a dropped line (the count still climbs) and to a repeated one (no
+ * change, no action) — neither of which an edge flag would survive. They wrap
+ * at 65535 harmlessly: the consumer compares for inequality, not magnitude. */
+uint16_t btnLights = 0, btnAc = 0;
+
+/* millis() of a press still awaiting its CMD confirmation; 0 = nothing pending. */
+unsigned long pendLights = 0, pendAc = 0;
+bool lastActionFailed = false;
+
+/* How long to wait for the Linux side to confirm before calling it a failure.
+ * A Kasa switch plus read-back takes ~1 s over Wi-Fi; a device that has fallen
+ * off the network burns the publisher's full retry budget first. */
+const unsigned long ACK_TIMEOUT_MS = 6000;
+#endif
 
 #if MCU_ACCEPTS_COMMANDS
   char    cmdBuf[64];
@@ -330,13 +360,27 @@ void pollLux() {
 }
 
 /* ------------------------------------------------------------------ *
- *  Buttons: A = occupancy override, B = clear presence, C = rescan bus.
+ *  Buttons.
+ *
+ *    A = toggle the Kasa smart bulb  ("lights")
+ *    B = toggle the Kasa smart plug  ("ac" / space heater)
+ *    C = rescan the Qwiic bus (hot-plug a node without rebooting)
+ *
+ *  A and B do NOT switch anything here — the MCU has no network. They bump a
+ *  counter that rides out in the telemetry line; uno_q_publisher.py does the
+ *  Kasa call and sends the result back as CMD, which is what lights the LED.
+ *
+ *  LED0 = bulb confirmed on     LED1 = plug confirmed on
+ *  LED2 = last action failed or was never confirmed
+ *
+ *  Occupancy override used to live on A. It moves to the simulator UI, which
+ *  is where the other declared-simulation inputs already are.
  *
  *  ModulinoButtons::update() copies its I2C read buffer into last_status[]
  *  EVEN WHEN THE READ FAILED, so a flaky or absent node can emit phantom
  *  presses. Require the same level on two consecutive polls before acting.
  * ------------------------------------------------------------------ */
-void pollButtons() {
+void pollButtons(unsigned long now) {
 #if USE_BUTTONS
   if (!haveButtons) return;
 
@@ -352,15 +396,32 @@ void pollButtons() {
     if (now3[i] != stable[i] && now3[i] == pending[i]) {
       stable[i] = now3[i];
       if (stable[i]) {                       // confirmed rising edge
+#if BUTTON_ACTUATION
+        if (i == 0) {
+          btnLights++; pendLights = now ? now : 1;
+          lastActionFailed = false; chirp(660);   // "press taken, awaiting device"
+        } else if (i == 1) {
+          btnAc++;     pendAc     = now ? now : 1;
+          lastActionFailed = false; chirp(660);
+        } else {
+          discoverNodes(); chirp(880);
+        }
+#else
         if (i == 0)      { occForce = !occForce; chirp(occForce ? 880 : 440); }
         else if (i == 1) { lastPresence = 0; occForce = false; chirp(440); }
         else             { discoverNodes(); chirp(880); }
+#endif
       }
     }
     pending[i] = now3[i];
   }
 
+#if BUTTON_ACTUATION
+  /* Confirmed device state, not requested state — see handleCommand(). */
+  buttons.setLeds(lightsOn, acOn, lastActionFailed);
+#else
   buttons.setLeds(occForce, false, false);
+#endif
 #endif
 }
 
@@ -395,21 +456,46 @@ void renderPixels() {
 #endif
 }
 
+/* `CMD <load> <on|off> [ok|fail]`
+ *
+ * The optional fourth token is the honest bit. `fail` means the publisher
+ * addressed a real device and it did not comply — so the mirror is deliberately
+ * NOT updated and the error LED goes on. Updating it would light the bulb LED
+ * for a bulb that is still dark, which is the exact failure this debug path
+ * exists to catch. A CMD with no fourth token is treated as ok, so the older
+ * three-token form still works. */
 void handleCommand(char *line) {
   char *verb = strtok(line, " \t");
   if (verb == NULL || strcmp(verb, "CMD") != 0) return;
   char *load  = strtok(NULL, " \t");
   char *state = strtok(NULL, " \t");
   if (load == NULL || state == NULL) return;
+  char *okTok = strtok(NULL, " \t");
 
   bool turnOn = (strcmp(state, "on") == 0);
+  bool failed = (okTok != NULL && strcmp(okTok, "fail") == 0);
   bool known  = true;
-  if      (strcmp(load, "lights") == 0) lightsOn = turnOn;
-  else if (strcmp(load, "ac")     == 0) acOn     = turnOn;
-  else                                  known    = false;
+
+  if (strcmp(load, "lights") == 0) {
+    if (!failed) lightsOn = turnOn;
+#if BUTTON_ACTUATION
+    pendLights = 0;
+#endif
+  } else if (strcmp(load, "ac") == 0) {
+    if (!failed) acOn = turnOn;
+#if BUTTON_ACTUATION
+    pendAc = 0;
+#endif
+  } else {
+    known = false;
+  }
+
+#if BUTTON_ACTUATION
+  if (known) lastActionFailed = failed;
+#endif
 
   renderPixels();
-  chirp(known ? (turnOn ? 880 : 440) : 196);
+  chirp(!known ? 196 : (failed ? 196 : (turnOn ? 880 : 440)));
 
   Serial.print(F("{\"ack\":\""));      Serial.print(load);
   Serial.print(F("\",\"state\":\""));  Serial.print(turnOn ? F("on") : F("off"));
@@ -464,9 +550,21 @@ void loop() {
   if (now - lastPoll >= POLL_MS) {
     lastPoll = now;
     pollPresence(now);
-    pollButtons();
+    pollButtons(now);
     pollKnobButton();
   }
+
+#if BUTTON_ACTUATION
+  /* A press the Linux side never answered for. Either the publisher is not
+     running, or host->MCU serial does not reach us (Risk V-2). Say so with the
+     error LED rather than leaving the operator watching a dead button. */
+  if (pendLights && (now - pendLights) > ACK_TIMEOUT_MS) {
+    pendLights = 0; lastActionFailed = true; chirp(196);
+  }
+  if (pendAc && (now - pendAc) > ACK_TIMEOUT_MS) {
+    pendAc = 0; lastActionFailed = true; chirp(196);
+  }
+#endif
 
   if (now - lastSample < SAMPLE_MS) return;   // non-blocking; no delay() anywhere
   lastSample = now;
@@ -507,6 +605,12 @@ void loop() {
   Serial.print(F("\",\"temp_src\":\"")); Serial.print(tempSrc);
   Serial.print(F("\",\"hum_src\":\""));  Serial.print(humSrc);
   Serial.print(F("\",\"dist_mm\":"));    Serial.print(lastDistMm, 0);
+#if BUTTON_ACTUATION
+  /* Press counters, not events: the publisher acts on the delta since the last
+     line it saw, so a dropped line loses nothing and a duplicate does nothing. */
+  Serial.print(F(",\"bl\":"));           Serial.print(btnLights);
+  Serial.print(F(",\"ba\":"));           Serial.print(btnAc);
+#endif
   Serial.print(F(",\"nodes\":"));        printNodes();
   Serial.println(F("}"));
 }

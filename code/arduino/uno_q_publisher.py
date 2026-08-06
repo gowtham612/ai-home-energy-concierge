@@ -168,6 +168,28 @@ def mcu_tcp_available(host: str = MCU_TCP_HOST, port: int = MCU_TCP_PORT,
         return False
 
 
+# The live monitor socket, so the return direction (Linux -> MCU) can reuse the
+# connection tcp_lines() already holds open. The router bridges that socket to
+# the MCU's Serial in BOTH directions; whether host->MCU bytes are actually
+# delivered is Risk V-2 and is what the button LEDs now test in the field.
+MCU_SOCK: Optional[socket.socket] = None
+MCU_SOCK_LOCK = threading.Lock()
+
+
+def mcu_send(text: str) -> bool:
+    """Write a line back to the MCU. False if there is no socket or it failed."""
+    with MCU_SOCK_LOCK:
+        s = MCU_SOCK
+        if s is None:
+            return False
+        try:
+            s.sendall(text.encode("ascii", errors="ignore"))
+            return True
+        except Exception as exc:
+            print(f"[uno_q] MCU write failed: {exc}", flush=True)
+            return False
+
+
 def tcp_lines(host: str = MCU_TCP_HOST, port: int = MCU_TCP_PORT):
     """Yield telemetry lines from the Arduino Router monitor socket.
 
@@ -190,6 +212,9 @@ def tcp_lines(host: str = MCU_TCP_HOST, port: int = MCU_TCP_PORT):
         try:
             s = socket.create_connection((host, port), 5)
             s.settimeout(2)
+            global MCU_SOCK
+            with MCU_SOCK_LOCK:
+                MCU_SOCK = s
             print(f"[uno_q] MCU monitor connected at tcp://{host}:{port}", flush=True)
             while RUNNING:
                 try:
@@ -206,6 +231,9 @@ def tcp_lines(host: str = MCU_TCP_HOST, port: int = MCU_TCP_PORT):
             print(f"[uno_q] MCU monitor error: {exc} — retrying in 2s", flush=True)
             time.sleep(2)
         finally:
+            with MCU_SOCK_LOCK:
+                if MCU_SOCK is s:
+                    MCU_SOCK = None
             if s is not None:
                 try:
                     s.close()
@@ -499,6 +527,37 @@ class KasaBank:
                   f"{'on' if is_on else 'off'})", flush=True)
         return ok, "kasa", watts
 
+    def toggle(self, load: str):
+        """Flip a load, deciding the target from the device's CURRENT state.
+
+        Returns (ok, want, source). The current state is read fresh rather than
+        tracked, because the bulb can also be switched by the hub, the Kasa app
+        or a wall switch — a cached mirror would invert the wrong way.
+
+        `self.devices` is the authority on whether a load is BOUND. A failed
+        poll() is not: TP-Link firmware serves one connection at a time, so our
+        own 5 s sweep (or the phone app) can lock a read out for a moment. An
+        earlier version returned "unbound" on any empty poll, which reported
+        'no Kasa device bound' for a bulb that was sitting right there — so a
+        transient read got the same LED and the same log line as a missing
+        device. Retry once, then say `kasa_error`, which is a different claim.
+        """
+        if not self.enabled or load not in self.devices:
+            return False, None, "unbound"
+
+        info = self.poll().get(load)
+        if info is None or info.get("state") is None:
+            time.sleep(KASA_RETRY_S)
+            info = self.poll().get(load)
+        if info is None or info.get("state") is None:
+            print(f"[kasa] {load}: bound but could not read state to toggle from",
+                  flush=True)
+            return False, None, "kasa_error"
+
+        want = "off" if info.get("state") == "on" else "on"
+        ok, source, _watts = self.switch(load, want)
+        return bool(ok), want, source
+
     def poll(self) -> Dict[str, Dict]:
         """Current state + measured power for every bound load."""
         if not self.enabled or not self.devices:
@@ -526,6 +585,92 @@ class KasaBank:
             except Exception as exc:
                 print(f"[kasa] poll error: {exc}", flush=True)
                 return {}
+
+
+class ButtonWatch:
+    """Modulino button presses -> real Kasa switching -> LED confirmation.
+
+    A hardware debug path that does not involve the browser at all: press
+    button A or B on the Buttons node and the corresponding device should
+    physically switch. It answers "is the Kasa path working through the UNO Q?"
+    with the hub, the rules engine and the UI all out of the way.
+
+    The MCU sends monotonic COUNTERS (`bl`, `ba`), not edges, so this survives a
+    dropped telemetry line — the count still climbs and the delta is still seen.
+    """
+
+    KEYS = {"bl": "lights", "ba": "ac"}
+
+    def __init__(self, bank: "KasaBank", pub: "Publisher"):
+        self.bank = bank
+        self.pub = pub
+        self.seen: Dict[str, int] = {}
+
+    def observe(self, raw: Dict) -> None:
+        for key, load in self.KEYS.items():
+            if key not in raw:
+                continue
+            try:
+                count = int(raw[key])
+            except (TypeError, ValueError):
+                continue
+
+            prev = self.seen.get(key)
+            self.seen[key] = count
+
+            # First sight: BASELINE ONLY. Acting here would replay every press
+            # since the MCU booted, each time this process restarts.
+            if prev is None:
+                continue
+            if count == prev:
+                continue
+            # A counter that went BACKWARDS means the MCU rebooted and reset it.
+            # (A genuine wrap needs 65535 presses; a re-flash needs none.)
+            if count < prev:
+                print(f"[button] {load}: counter reset {prev} -> {count} "
+                      f"(MCU restarted) — re-baselined, not switching", flush=True)
+                continue
+
+            self._act(load, count - prev)
+
+    def _act(self, load: str, presses: int) -> None:
+        # Two presses land back where they started; only the parity matters.
+        if presses > 1:
+            print(f"[button] {load}: {presses} presses coalesced", flush=True)
+            if presses % 2 == 0:
+                state = "on" if self._is_on(load) else "off"
+                mcu_send(f"CMD {load} {state} ok\n")
+                return
+
+        ok, want, source = self.bank.toggle(load)
+        if want is None:
+            why = ("no Kasa device bound — nothing to switch" if source == "unbound"
+                   else "device is bound but did not answer — not switching blind")
+            print(f"[button] {load}: {why}", flush=True)
+            mcu_send(f"CMD {load} off fail\n")
+            return
+
+        print(f"[button] {load} -> {want}  ok={ok} source={source}", flush=True)
+
+        # Tell the MCU what the DEVICE reported, so the LED cannot claim a switch
+        # that did not happen. This write is also the live test of the host->MCU
+        # serial direction (Risk V-2).
+        if not mcu_send(f"CMD {load} {want} {'ok' if ok else 'fail'}\n"):
+            print("[button] could not write back to the MCU — LED will time out",
+                  flush=True)
+
+        # Push the new state immediately rather than waiting for the next
+        # KASA_POLL_S sweep, so the dashboard tracks the button in real time.
+        if ok:
+            info = self.bank.poll().get(load) or {}
+            watts = info.get("watts")
+            self.pub.load(load, want,
+                          round(float(watts), 1) if watts is not None else 0.0,
+                          metered=bool(info.get("metered")))
+        self.pub.actuator(load, want, "manual-button", bool(ok), source)
+
+    def _is_on(self, load: str) -> bool:
+        return (self.bank.poll().get(load) or {}).get("state") == "on"
 
 
 class Actuator:
@@ -712,6 +857,9 @@ def main():
 
     pub = Publisher(args.broker, args.port)
 
+    # Modulino buttons A/B toggle the two Kasa loads directly, bypassing the hub.
+    buttons = ButtonWatch(bank, pub)
+
     # Subscribe to hub commands so the loop can close: reco -> approve -> actuate.
     actuator = Actuator(pub, handle, bank)
     pub.subscribe("home/command/#", actuator.on_command)
@@ -755,6 +903,12 @@ def main():
                 actuator.last_ack = raw
                 print(f"[uno_q] MCU ack: {raw}", flush=True)
                 continue
+
+            # --- Modulino button presses (hardware debug path) ---
+            # Deliberately BEFORE the MCU_SIGNALS gate below: that gate governs
+            # which SENSOR signals the MCU may own, and a button press is a
+            # command, not a sensor reading.
+            buttons.observe(raw)
 
             # --- edge processing ---
             # Only signals the MCU actually reported. The Modulino sketch emits
