@@ -475,9 +475,41 @@ def shot1(browser: bool) -> None:
         time.sleep(4)
 
     # -- 2. a visible cue into the simulator's own UI -----------------------
-    Step.start("Cue the simulator: presence -> away",
-               "the Away button in the simulator visibly highlights and its wire "
-               "log prints an AUTOPILOT line")
+    Step.start("Turn the bulb ON",
+               "bulb lights; dashboard and simulator both show ~10.8 W, "
+               "labelled 'real device / measured'")
+    Step.info("publishing home/command/living/lights — the same path a human tapping "
+              "Approve uses, so the publisher does the switching and nothing races "
+              "it for the bulb's single connection")
+    if not command_load("lights", "on"):
+        Step.fail("could not publish the command")
+    else:
+        Step.ok("command published")
+
+    Step.info("waiting for the publisher to execute it and report back…")
+    seen = None
+    for _ in range(8):
+        time.sleep(3)
+        seen = load_state("living/lights")
+        if seen.get("state") == "on" and (seen.get("watts") or 0) > 1:
+            break
+    if seen and seen.get("state") == "on":
+        Step.ok(f"hub agrees: living/lights on at {seen.get('watts')} W "
+                f"metered={seen.get('metered')}")
+    else:
+        Step.fail(f"hub did not pick up the change: {seen}")
+
+    # -- 4. the button press ----------------------------------------------
+    # NOTE ON ORDERING. This is a self-test of the cue mechanism, not part of
+    # shot 1's story — shot 1 is "button pressed, real bulb goes dark" and needs
+    # no presence at all. It ran BEFORE the bulb was switched on, which is
+    # backwards twice over: nothing here depends on presence, and "leave the
+    # house, then turn the lights on" is not a sequence anyone would narrate.
+    # It belongs in shot 2 (away -> finding -> approve), where going away is
+    # what causes the finding. Kept here only until shot 2 is scripted.
+    Step.start("Cue the simulator: presence -> away  [mechanism self-test]",
+               "the Away button visibly highlights and moves by itself — proves a "
+               "scripted run drives the real UI rather than posting behind it")
     # Proof the PAGE acted, not just that the cue was accepted: this script never
     # posts /api/presence itself. setPres() in the page does, as a side effect of
     # moving its own control. So if the hub's presence flips, the browser applied
@@ -519,31 +551,6 @@ def shot1(browser: bool) -> None:
                       "simulator window actually open and connected?")
 
     # -- 3. lights ON ------------------------------------------------------
-    Step.start("Turn the bulb ON",
-               "bulb lights; dashboard and simulator both show ~10.8 W, "
-               "labelled 'real device / measured'")
-    Step.info("publishing home/command/living/lights — the same path a human tapping "
-              "Approve uses, so the publisher does the switching and nothing races "
-              "it for the bulb's single connection")
-    if not command_load("lights", "on"):
-        Step.fail("could not publish the command")
-    else:
-        Step.ok("command published")
-
-    Step.info("waiting for the publisher to execute it and report back…")
-    seen = None
-    for _ in range(8):
-        time.sleep(3)
-        seen = load_state("living/lights")
-        if seen.get("state") == "on" and (seen.get("watts") or 0) > 1:
-            break
-    if seen and seen.get("state") == "on":
-        Step.ok(f"hub agrees: living/lights on at {seen.get('watts')} W "
-                f"metered={seen.get('metered')}")
-    else:
-        Step.fail(f"hub did not pick up the change: {seen}")
-
-    # -- 4. the button press ----------------------------------------------
     Step.start("Press Modulino button A (simulated via the MCU's own counter)",
                "counter bl increments -> publisher sees the delta -> switches the "
                "REAL bulb off -> writes CMD back -> button LED 0 goes out")

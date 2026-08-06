@@ -49,11 +49,25 @@ $halfW = [int]($sw / 2)
 
 Write-Host "screen ${sw}x${sh} - browsers ${halfW}x${topH}, terminal ${sw}x${botH}" -ForegroundColor DarkGray
 
-# --- close windows a previous run left behind -------------------------------
+# --- stop anything a previous run left behind -------------------------------
+# Both the windows AND the script. Two overlapping autopilots interleave their
+# steps - one turning the bulb on while the other turns it off - and the result
+# is a run where the terminal, the dashboard and the device all disagree and
+# every individual reading looks explicable. Seen for real; kill first, ask
+# later.
+Get-CimInstance Win32_Process |
+    Where-Object { $_.CommandLine -like '*demo_autopilot*' -and $_.Name -eq 'python.exe' } |
+    ForEach-Object {
+        Write-Host "  stopping previous run (pid $($_.ProcessId))" -ForegroundColor DarkYellow
+        Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+    }
+Get-Process powershell -ErrorAction SilentlyContinue |
+    Where-Object { $_.MainWindowTitle -like '*QUAD demo*' } |
+    ForEach-Object { Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue }
 Get-CimInstance Win32_Process |
     Where-Object { $_.CommandLine -like '*quad_demo_*' } |
     ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
-Start-Sleep -Milliseconds 800
+Start-Sleep -Milliseconds 1200
 
 # --- browsers ---------------------------------------------------------------
 if (-not $NoBrowser) {
