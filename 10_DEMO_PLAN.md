@@ -1,5 +1,20 @@
 # 10 — Demo plan: real hardware + AI, staged as one convincing story
 
+> ## ⚠ FORMAT CHANGED: this is a **2-minute recorded video**, not a live 5-minute slot.
+>
+> §0's reasoning and §3's beats still hold. **§4's timing table is void** — replaced by
+> §8, a shot list built for a cut video. **§6's checklist does not work as written** —
+> corrected in §10. Read §8 first, then §3 for the *why* behind each beat.
+>
+> **Video changes one thing fundamentally.** §3 Beat B spends 130 words teaching you to
+> stage an 11.5 s pause gracefully on stage. In a recorded video you simply **cut it** —
+> and you can retake until the model says something good, which de-risks the entire plan.
+> The rule that replaces it: if you cut a wait, **caption the real number on screen**.
+> Never let an edit imply latency the system does not have.
+>
+> **Three hardware facts §1 and §3 get wrong, verified against the live devices on
+> 2026-08-06 — see §9. One of them silently breaks the payload of shot 2.**
+
 **Read this alongside `02_DEMO_SCRIPT.md` (the timed script) — this file is the "why it's
 convincing" layer and the exact hardware staging.** `02_DEMO_SCRIPT.md` still describes the
 original breadboard/servo/Cloud-AI-100 plan and needs a rewrite once this staging is locked;
@@ -298,3 +313,232 @@ discipline" section verbatim, it's good advice regardless of hardware. It needs 
 This is a mechanical follow-up once you've rehearsed §3 once and know it holds up at the actual
 timings — do the rewrite after one live rehearsal, not before, so the script matches what you
 actually say rather than what you planned to say.
+
+---
+
+# §8 — The 2-minute video: shot list
+
+Six segments, shot independently and in any order, retaken freely. The whole value of a
+recorded demo is that **no beat has to survive a live network**. Total 120 s.
+
+| # | Shot | Length | What is on screen |
+|---|---|---|---|
+| 1 | **Hook — physical, no UI** | 0:00–0:12 | A finger presses a button on the UNO Q. The bulb across the room goes dark. Then the bench: board, knob, bulb, plug. |
+| 2 | **Sense → physical act** | 0:12–0:38 | Presence → away. Finding appears, priced. Approve. **Bulb goes dark**, dashboard watts fall to 0.0, card flips to *realized*. |
+| 3 | **The AI decides** | 0:38–0:56 | Plan panel: two findings ranked, the dryer **deferred** in the model's own words. Latency captioned (§8.1). |
+| 4 | **The refusal** | 0:56–1:20 | **Press the knob** → 29.5 °C on screen → Approve the A/C → **HTTP 409**, nothing switches, reason visible. |
+| 5 | **The AI gets caught** | 1:20–1:42 | `/ask` → answer streams → **`unverified`** badge listing the invented figure. |
+| 6 | **Three tiers + close** | 1:42–2:00 | µs → ms → s. 30.6 µs on the board, 3.3 s on the NPU, 110 µs to check every number. |
+
+**If it overruns, cut shot 3 first.** Its job is "the model decides" — which shot 4 and
+shot 5 already demonstrate with more drama. Fold its one good line ("it deferred the dryer
+as legitimate and killed the A/C as waste") into shot 6 as a caption.
+
+## 8.1 The one editing rule
+
+You may cut dead time. You may not imply speed the system does not have.
+
+- Cutting the 11.5 s plan call is fine — **show `plan synthesis · 11.5 s · one call per
+  change` on screen while it happens.** That number is an asset, not an embarrassment: it
+  is the only latency in the demo big enough to *feel*, and feeling it is what makes "a
+  real model, not a lookup" credible.
+- Do **not** speed-ramp the bulb switching. That is genuinely ~2 s and should play real.
+- Retaking until the model produces a good *ranking* is directing. Retaking until it
+  produces a *number you liked* is fabrication. Shot 5 is literally about that line.
+
+## 8.2 Shot 4 is the money shot — direct it properly
+
+**Press the knob, do not turn it.** One press toggles 22 °C ↔ 29.5 °C (verified in
+`sketch.ino::pollKnobButton`), crossing R7's 27 °C limit in a single click. Turning takes
+~60 detents and is dead screen time.
+
+Three cuts, ~8 s of action, no waiting: finger presses knob → dashboard reads 29.5 °C →
+tap Approve → **409 refusal banner with its reason**.
+
+## 8.3 The shot the plan misses — the physical button
+
+§1 lists the Modulino Buttons only as a "manual override / recovery path". For a video
+that badly undersells the most visceral asset available:
+
+> **A finger presses a button on the board. A real bulb across the room goes dark. No
+> browser anywhere in frame.**
+
+Five seconds, no UI, no network to explain. It is the clearest possible statement of
+sensor → actuator for Archetype E, and it earns the "this is real hardware" claim *before*
+asking anyone to trust a screen. Open with it.
+
+Button A = bulb, button B = the `ac` plug, button C = rescan. The LEDs show
+**device-confirmed** state, not intent — if the LED lights, the bulb really switched. Say
+that in one clause; it is a small, true, unusual detail.
+
+---
+
+# §9 — Corrections: verified hardware facts that change the shots
+
+Checked against the live devices on 2026-08-06.
+
+## 9.1 ⚠ The bulb is at 9 % brightness — it draws 1.7 W
+
+```
+KL120  on=False  watts=0.0  brightness=9
+```
+
+Shot 2's entire payload is a wattage number falling to zero. **1.7 W → 0.0 W is not a
+number anyone will feel.** At full brightness this bulb draws ~10 W — an earlier session
+logged 10.8 W → 0.0 W.
+
+Set it before filming. It also makes the bulb going dark **visibly** darker on camera,
+which is the actual shot:
+
+```bash
+adb shell "cd /home/arduino/ai-home-energy-concierge/code/arduino && set -a && . ./board.env && set +a && ~/energy-venv/bin/python3 -c 'import asyncio
+from kasa import Discover, Module
+async def m():
+    d = await Discover.discover_single(\"192.168.86.49\", timeout=8)
+    await d.update()
+    await d.modules[Module.Light].set_brightness(100)
+    print(\"brightness 100\")
+asyncio.run(m())'"
+```
+
+## 9.2 ⚠ The `ac` load reads 0 W — nothing will drop
+
+```
+HS110  on=False  watts=0
+```
+
+The plug meters correctly, but the **space heater's own switch is off**, so it measures
+nothing even when energised. §1 assumes a fan is attached; right now it is the heater.
+
+Either **plug the fan into that outlet** (a table fan draws ~40–70 W — a good visible
+number, safe to leave running), or **film the wattage drop on the bulb only** and use the
+`ac` load purely for the refusal beat, which needs no wattage at all.
+
+Do **not** switch the heater on for a 1.5 kW drop. A heater cycling on camera in an empty
+room is the one shot that could read as unsafe, and it argues against your own thesis.
+
+## 9.3 ⚠ Plug #3 (EP40) has no energy meter
+
+```
+EP40  watts=no energy meter
+```
+
+§5 proposes it as a phantom-standby prop. It works for on/off **state**, but its wattage
+would be **modelled, not measured** — the dashboard will correctly label it
+`simulated · modelled` beside the bulb's `real device · measured`. That contrast is honest
+and fine, but do not narrate it as a third *measured* device. Cut the stretch beat from a
+2-minute video regardless: breadth, not a new capability.
+
+## 9.4 Only one Knob is on the bus
+
+§1 assumes Knob #1 plus a cold-spare Knob #2. Telemetry reports `"nodes":"KB"` — one Knob,
+one Buttons board. If a second Knob exists in a drawer the cold-spare advice stands; if
+not, delete that row rather than leaving a checklist item nobody can tick.
+
+## 9.5 The simulator can no longer fake the bulb — by design
+
+Loads backed by a real Kasa device are marked `metered`, and the simulator now refuses to
+POST state for them (it logs *"real metered device — simulator will not override it"*).
+Before this, the simulator would show `on / 12 W` while the dashboard showed the true
+`0 W`, because the publisher re-published real state within 5 s.
+
+**For filming this means:** you cannot stage the bulb from the simulator. Switch it for
+real — via Approve, via the Modulino button, or via the Kasa app. That is the correct
+behaviour and a better story, but it will surprise you mid-shoot if you expect otherwise.
+
+---
+
+# §10 — Corrected pre-demo checklist
+
+§6's commands do not work as written. These do.
+
+```bash
+# 1. Board config — real path, not a placeholder
+adb shell "grep -E 'MCU_SIGNALS|KASA_LOADS|KASA_LIGHTS_HOST|KASA_AC_HOST' /home/arduino/ai-home-energy-concierge/code/arduino/board.env"
+# Expect MCU_SIGNALS=temp_c, KASA_LOADS=lights,ac, 192.168.86.x hosts
+
+# 2. CRLF check — the worst failure mode on this project (log §18.1)
+adb shell "grep -c $'\r' /home/arduino/ai-home-energy-concierge/code/arduino/board.env"
+# Non-zero => the publisher serves INVENTED sensor data while looking perfectly healthy
+
+# 3. Publisher on the REAL knob, not synthetic
+adb shell "grep -E 'MCU monitor connected|SYNTHETIC|MQTT connected' /tmp/publisher.log"
+
+# 4. AI flags — check the RUNNING hub, not your shell.
+#    `echo $AI_PLAN` tells you nothing: the server reads the flags at startup, so a
+#    correct shell variable and a hub started without it look identical from outside.
+curl -s -o /dev/null -w "%{http_code}\n" http://localhost:8000/ask     # 200 => AI_ASK on
+curl -s http://localhost:8000/api/state | grep -c '"plan"'             # 1  => AI_PLAN on
+
+# 5. Smoke test — STOP THE PUBLISHER FIRST (log §19.1)
+adb shell "pkill -9 -f '[u]no_q_publisher.py'"
+cd code && python smoke_test.py     # 32/32. With the publisher live you get a spurious
+                                    # 23/25: its real 1.7 W overwrites the test fixtures.
+# then relaunch the publisher
+```
+
+Start the hub with all three flags — they default **off**:
+
+```bash
+AI_ANOMALY=1 AI_PLAN=1 AI_ASK=1 python hub/server.py
+```
+
+- [ ] Bulb brightness set to 100 (§9.1) — else shot 2 shows 1.7 W
+- [ ] Fan in the `ac` outlet, or shot 2 films the bulb only (§9.2)
+- [ ] Knob **press** tested — one click gives 29.5 °C (§8.2)
+- [ ] Modulino button tested — press switches the real bulb, LED confirms (§8.3)
+- [ ] `/ask` returns 200 and a badge renders
+- [ ] `"plan"` present in `/api/state`
+- [ ] Whole video shot and cut with time to spare — it is the submission, not a backup
+
+---
+
+# §11 — Protect this one claim, and aim shot 5 at it
+
+§3 Beat C is right that most teams *promise* their model does not hallucinate while you
+can *show* the check. That claim got stronger since the plan was written: the verifier
+caught the model doing forbidden arithmetic during development, **unprompted and
+unanticipated**:
+
+```
+Q: "What if I shift the dryer to 9 PM?"
+A: "...reducing cost from $0.39 to $0.19, saving $0.20."   ->  UNVERIFIED  [0.19]
+```
+
+`$0.39` was in the digest. `$0.19` was not — the model computed it.
+
+**Ask exactly that question in shot 5.** It reliably tempts the model into arithmetic, and
+a video lets you retake until it does.
+
+An **amber `unverified` badge is worth more on camera than a green one.** A green badge
+proves the model behaved; an amber one proves *the check works* — and only the second is
+evidence about your system rather than about the model's mood that afternoon. Say the line
+that lands it:
+
+> "That badge isn't decoration. Every number the model just said was checked, mechanically,
+> against what Python actually computed. It got caught. Not because we told it to behave —
+> because we checked."
+
+If it refuses to misbehave after several takes, `python hub/provenance.py` deterministically
+plants and catches one (7/7 cases). Less slick, equally true.
+
+---
+
+# §12 — What I would cut, and why
+
+Honest editorial view of the plan against a 120-second budget:
+
+- **Cut §5's stretch beat.** No new capability, and §9.3 shows the third plug cannot be
+  narrated as measured anyway.
+- **Cut Beat E as a spoken beat.** The `learned · 0.999` badge does the work silently in
+  shots 2–4; a sentence explaining the edge tier belongs in shot 6's table, not its own
+  segment. The plan already half-concedes this ("one sentence + one visual").
+- **Keep §1's fan-as-A/C paragraph verbatim.** Saying it straight is the right call and it
+  is the best-argued page in the document.
+- **Keep §2's "name the mix once" sentence.** In a 2-minute video it becomes a single
+  caption rather than spoken narration, but it must still appear — the honesty labelling
+  is genuinely in the code and it costs three seconds to earn credit for it.
+
+The plan's instinct throughout — label the simulation, do not hide the fan, name the
+latency — is the right one and is what makes the rest credible. None of my corrections
+change that; they fix numbers and commands, not judgement.
