@@ -31,8 +31,8 @@ try:
 except ImportError:
     mqtt = None
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 MQTT_HOST = os.environ.get("MQTT_HOST", "localhost")
@@ -47,6 +47,7 @@ ROOT = Path(__file__).resolve().parent.parent
 DASHBOARD_DIR = ROOT / "dashboard"
 PHONE_DIR = ROOT / "phone"
 SIMULATOR_DIR = ROOT / "simulator"
+ASK_DIR = ROOT / "ask"
 
 
 class StateStore:
@@ -440,6 +441,57 @@ async def dashboard():
 @app.get("/phone")
 async def phone():
     return FileResponse(PHONE_DIR / "index.html")
+
+
+# --------------------------------------------------------------------------
+# TIER 3: natural-language Q&A (AI_ASK=1). Additive — its own page and its own
+# endpoints, so nothing here touches the simulator or the approve flow.
+# --------------------------------------------------------------------------
+
+@app.get("/ask")
+async def ask_page():
+    if os.environ.get("AI_ASK", "0") != "1":
+        return JSONResponse({"error": "Q&A disabled; start the hub with AI_ASK=1"},
+                            status_code=404)
+    return FileResponse(ASK_DIR / "index.html")
+
+
+@app.get("/api/ask/suggestions")
+async def ask_suggestions():
+    try:
+        import ask as ask_mod
+        return JSONResponse(ask_mod.SUGGESTED_QUESTIONS)
+    except Exception:
+        return JSONResponse([])
+
+
+@app.post("/api/ask")
+async def api_ask(request: Request):
+    """Stream an answer as newline-delimited JSON.
+
+    Streaming is not decoration: first token lands in ~0.15 s while the full
+    answer takes ~2.5 s, so the reply reads as immediate. The final line carries
+    the provenance verdict the page renders as a badge.
+    """
+    if os.environ.get("AI_ASK", "0") != "1":
+        return JSONResponse({"error": "Q&A disabled"}, status_code=404)
+    try:
+        import ask as ask_mod
+    except Exception as exc:
+        return JSONResponse({"error": f"ask unavailable: {exc}"}, status_code=503)
+
+    body = await request.json()
+    question = str(body.get("question", "")).strip()
+    if not question:
+        return JSONResponse({"error": "question is required"}, status_code=400)
+
+    state = STORE.public_state()
+
+    def gen():
+        for chunk in ask_mod.ASKER.stream(question, state):
+            yield json.dumps(chunk) + "\n"
+
+    return StreamingResponse(gen(), media_type="application/x-ndjson")
 
 
 @app.get("/simulator")

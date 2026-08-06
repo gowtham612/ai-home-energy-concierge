@@ -38,13 +38,23 @@ SMALL_INT_MAX = 24
 # "R1".."R7" are rule identifiers, not quantities.
 _RULE_ID_RE = re.compile(r"\bR[1-7]\b")
 
+# Clock times. "18:30" is a reference to when something happened, not a figure
+# the model computed — but its minutes field parses as 30, which is above
+# SMALL_INT_MAX and was flagging perfectly honest answers ("shifting from peak
+# at 18:30 to off-peak") as hallucinations. A verifier that cries wolf on a
+# correct answer trains everyone to ignore the badge, which costs more than the
+# check is worth. Same reasoning as rule ids: strip, do not whitelist a range.
+_CLOCK_RE = re.compile(r"\b\d{1,2}:\d{2}\b")
+
 
 def extract_numbers(text: str) -> List[str]:
     """Every numeric literal in the text, in order of appearance."""
     if not text:
         return []
-    # Drop rule ids first so R7 does not register as the number 7.
+    # Drop rule ids and clock times first, so R7 does not register as 7 and
+    # 18:30 does not register as 30.
     cleaned = _RULE_ID_RE.sub(" ", text)
+    cleaned = _CLOCK_RE.sub(" ", cleaned)
     return [m.group(0).replace(",", "") for m in _NUMBER_RE.finditer(cleaned)]
 
 
