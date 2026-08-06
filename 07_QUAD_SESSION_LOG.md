@@ -924,7 +924,7 @@ difference is the whole point.
 
 Chirps: 660 Hz = press taken, awaiting device · 880 = confirmed on ·
 440 = confirmed off · 196 = failed, or no confirmation within `ACK_TIMEOUT_MS`
-(6 s).
+(12 s).
 
 Occupancy override moved off button A to the simulator UI, alongside the other
 declared-simulation inputs.

@@ -173,9 +173,14 @@ unsigned long pendLights = 0, pendAc = 0;
 bool lastActionFailed = false;
 
 /* How long to wait for the Linux side to confirm before calling it a failure.
- * A Kasa switch plus read-back takes ~1 s over Wi-Fi; a device that has fallen
- * off the network burns the publisher's full retry budget first. */
-const unsigned long ACK_TIMEOUT_MS = 6000;
+ *
+ * Generous on purpose. A toggle is: read current state (retried once) + switch
+ * + settle + read back, each of which can stall on a busy hotspot — restoring
+ * the bulb during bring-up took three discovery attempts before one answered.
+ * Too short and the LED reports a failure for a switch that then succeeds, and
+ * this exists to be TRUSTED. A late CMD still clears the error LED, so the only
+ * cost of waiting is a slower verdict on a genuinely dead path. */
+const unsigned long ACK_TIMEOUT_MS = 12000;
 #endif
 
 #if MCU_ACCEPTS_COMMANDS
