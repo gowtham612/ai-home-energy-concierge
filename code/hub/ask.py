@@ -131,6 +131,42 @@ def _digest_lines(state: Dict) -> Tuple[str, Dict[str, str]]:
                      + (f", anomaly score {r['anomaly_score']}"
                         if r.get("anomaly_score") is not None else ""))
 
+    # R7 comfort guardrail. WITHOUT THIS the model cannot answer "why did you
+    # refuse?" — it has no idea a guardrail exists. Asked cold it confabulated
+    # ("no intervention occurred"), and worse, when told the room was 29.5 C it
+    # RECOMMENDED switching the A/C off — the exact action R7 blocks. An
+    # assistant contradicting its own safety gate on stage is worse than one
+    # that says nothing, so the thresholds and the current verdict go in the
+    # digest as facts the model can cite.
+    try:
+        import rules as _rules
+        cmax, cmin = _rules.COMFORT_MAX_C, _rules.COMFORT_MIN_C
+    except Exception:
+        cmax, cmin = 27.0, 16.0
+    allowed["comfort.max_c"] = f"{cmax}"
+    allowed["comfort.min_c"] = f"{cmin}"
+    lines.append(f"COMFORT GUARDRAIL (rule R7): the system REFUSES to switch off "
+                 f"cooling above {cmax} C, or heating below {cmin} C, even when "
+                 f"asked. Human comfort outranks the saving.")
+
+    for _rname, _room in (state.get("rooms") or {}).items():
+        t = _room.get("temp_c")
+        if t is None:
+            continue
+        if t > cmax:
+            lines.append(f"GUARDRAIL ACTIVE in {_rname}: {t} C is ABOVE the {cmax} C "
+                         f"limit, so switching the A/C off is currently REFUSED "
+                         f"(HTTP 409). Do not advise turning it off.")
+        elif t < cmin:
+            lines.append(f"GUARDRAIL ACTIVE in {_rname}: {t} C is BELOW the {cmin} C "
+                         f"limit, so switching the heater off is currently REFUSED "
+                         f"(HTTP 409). Do not advise turning it off.")
+
+    # A refusal that actually happened, if the hub recorded one.
+    ref = state.get("last_refusal") or {}
+    if ref.get("reason"):
+        lines.append(f"MOST RECENT REFUSAL: {ref['reason']}")
+
     plan = state.get("plan") or {}
     if plan.get("situation"):
         lines.append(f"PLAN SITUATION: {plan['situation']}")
@@ -218,7 +254,8 @@ class Asker:
         t0 = time.time()
 
         if not llm_mod.LLM_ENABLED or requests is None:
-            return self._wrap(deterministic_answer(question, state), allowed,
+            return self._wrap(deterministic_answer(question, state),
+                              self._with_question_numbers(allowed, question),
                               "template", time.time() - t0)
         try:
             r = requests.post(f"{self.base_url}/chat/completions",
@@ -227,10 +264,12 @@ class Asker:
                               timeout=ASK_TIMEOUT_S)
             r.raise_for_status()
             text = r.json()["choices"][0]["message"]["content"].strip()
-            return self._wrap(text, allowed, "llm", time.time() - t0)
+            return self._wrap(text, self._with_question_numbers(allowed, question),
+                              "llm", time.time() - t0)
         except Exception as exc:
             print(f"[ask] falling back to deterministic ({type(exc).__name__}: {exc})")
-            return self._wrap(deterministic_answer(question, state), allowed,
+            return self._wrap(deterministic_answer(question, state),
+                              self._with_question_numbers(allowed, question),
                               "template", time.time() - t0)
 
     def stream(self, question: str, state: Dict) -> Generator[Dict, None, None]:
@@ -278,6 +317,25 @@ class Asker:
             text = deterministic_answer(question, state)
             yield {"delta": ("\n" if acc else "") + text}
             yield self._wrap(text, allowed, "template", time.time() - t0, done=True)
+
+    @staticmethod
+    def _with_question_numbers(allowed: Dict, question: str) -> Dict:
+        """Numbers the USER put in the question are not the model's invention.
+
+        Probed live: asked "the room is set to 65 degrees, is that reasonable?"
+        the model correctly answered that the room is 18.3 C, not 65 — and the
+        badge went amber because it had echoed "65". Flagging a model for
+        repeating the question back is a false positive, and a verifier that
+        cries wolf on a correct answer trains everyone to ignore the badge.
+        """
+        out = dict(allowed)
+        try:
+            import provenance
+            for i, n in enumerate(provenance.extract_numbers(question or "")):
+                out[f"question.{i}"] = n
+        except Exception:
+            pass
+        return out
 
     def _wrap(self, text: str, allowed: Dict, answered_by: str,
               latency: float, done: bool = False) -> Dict:
