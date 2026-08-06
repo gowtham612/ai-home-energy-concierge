@@ -74,11 +74,22 @@ drama. Fold its line into shot 6 as a caption.
 - **Do:** open `/ask`, type **"What if I shift the dryer to 9 PM?"**. Let the answer stream.
   Point the camera at the badge.
 - **Aim for amber.** An `unverified` badge proves *the check works*; a green one only proves
-  the model behaved that afternoon. That question reliably tempts the model into arithmetic
-  it was told not to do — retake until it does.
+  the model behaved that afternoon.
+- **Measured hit rate: 6/6.** That question produced an `unverified` badge on 3/3 takes
+  against the fixed fixture and 3/3 against live hub state. Expect it to land, but it is a
+  model output, not a guarantee — budget two or three takes, not forty.
+- **Do not substitute a different question without testing it.** Hit rate is
+  state-dependent: *"What percentage of my bill is waste?"* also scored 3/3 on the fixture
+  and then **0/3** on live state. The dryer question is the one that has been checked in
+  both.
+- **Guaranteed fallback:** `python hub/provenance.py` plants and catches a hallucinated
+  number deterministically (7/7 cases, no model involved). Less slick, always works.
 - **Caption:** *"$0.39 was given to it. $0.19 was not — it did the arithmetic anyway. We
   caught it mechanically, in 110 µs."*
-- **Fallback:** `python hub/provenance.py` deterministically plants and catches one (7/7).
+- **If it comes up green two or three takes running,** do not keep rolling hoping for
+  amber — switch to `python hub/provenance.py` on camera and narrate the same point. A
+  green badge is still a true result; grinding for a failure you want to film is the
+  wrong instinct on a project built around not overstating things.
 
 ## Shot 6 — Three tiers and close (1:42–2:00)
 

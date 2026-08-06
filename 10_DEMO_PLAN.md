@@ -542,3 +542,87 @@ Honest editorial view of the plan against a 120-second budget:
 The plan's instinct throughout — label the simulation, do not hide the fan, name the
 latency — is the right one and is what makes the rest credible. None of my corrections
 change that; they fix numbers and commands, not judgement.
+
+---
+
+# §13 — Adversarial review response (2026-08-06)
+
+A devil's-advocate review of the AI work and the video pivot. Both actionable items are
+fixed; recording the outcomes because the reasoning matters more than the verdict.
+
+## 13.1 ✅ FIXED — the silent `"lights"` fallback was narrowed, not removed
+
+**The finding, and it was correct.** Commit `fda9f8b` fixed the learned-A/C incident but
+left `_load_from_rule` ending in `return "lights"` — the exact mechanism that made the
+incident possible, waiting for the next thing that touches Recommendation construction.
+
+**One correction to the review's reasoning, in the safer direction.** It judged the line
+currently unreachable because `Finding.load_key` is required. Nearly right:
+`Recommendation.load_key` **defaults to `""`**, so unreachability depends on every
+construction site remembering to pass it. Two do today. A third — a new rule, a
+deserialised object, a refactor — inherits the guess with nothing to flag it. The review
+called it tech debt; it was slightly closer to live than that.
+
+**Fixed in `493c389`:** returns `""`, and `/api/apply` refuses with **422** instead of
+acting. Behaviour unchanged for the six mapped rules and anything carrying a `load_key`.
+
+Verified:
+```
+unmapped rule + empty load_key -> ''   + logged refusal
+learned finding with load_key  -> 'ac'
+mapped rule (unchanged)        -> 'ac'
+```
+
+## 13.2 ✅ FIXED — "reliably tempts the model" was an unmeasured claim
+
+**The finding was fair**: whether shot 5 gets an amber badge is a model output, not a
+structural guarantee, and "retake until it does" reads badly if the model behaves.
+
+Rather than soften the wording, it was **measured** — 3 trials per question, on the fixed
+fixture and again on live hub state:
+
+| Question | Fixture | Live | Caught |
+|---|---|---|---|
+| **"What if I shift the dryer to 9 PM?"** | **3/3** | **3/3** | `0.19` / `0.00032` |
+| "What percentage of my bill is waste?" | 3/3 | **0/3** | `1.427`, `50` |
+| "How much would I save over a year?" | 0/3 | — | (model correctly declines) |
+| "What is the total cost of all findings combined?" | 0/3 | — | (declines) |
+
+**Both conclusions are true at once.** The review's general caution is vindicated —
+hit rate *is* state-dependent, and the second row proves it: 3/3 becomes 0/3 when the
+state changes. But the specific question the docs recommend is robust, at 6/6 across two
+different states.
+
+`02_DEMO_SCRIPT.md` now states the measured rate, warns against substituting an untested
+question, and says to stop grinding after two or three green takes and use the
+deterministic self-test instead. Filming a failure you want badly enough to keep rolling
+for is the wrong instinct on a project built around not overstating things.
+
+## 13.3 The review's own near-miss, worth preserving
+
+It first concluded the `$0.39 → $0.19` incident was invented for dramatic effect, having
+searched only `provenance.py`'s self-test fixtures (which use different numbers). A wider
+search found it dated in `07_QUAD_SESSION_LOG.md` §19.6 and reproduced verbatim in
+`code/README.md`.
+
+Worth keeping because it is the shape of the mistake a judge could make: a claim that
+looks fabricated because the obvious place to check is not where the evidence lives. **If
+asked about the provenance incident, point at the session log entry with its date, not at
+the self-test** — the self-test proves the mechanism, the log proves the incident.
+
+## 13.4 Confirmed, no action
+
+- §8.1's editing rule ("cut the wait, caption the number") — the right discipline for a
+  recorded demo.
+- The 120 s timing math, with the 11.5 s planner call handled by cutting rather than
+  narrating.
+- §9's three hardware corrections are load-bearing, not padding: the bulb at 9 % and the
+  A/C plug at 0 W would each have silently ruined a shot.
+- §9.5 (simulator refuses metered loads), verified against `simulator/index.html`.
+- §10's "check the running hub, not your shell".
+- The knob-press preset straddling R7's 27 °C threshold, verified against firmware.
+
+## 13.5 Standing item this review did not raise
+
+`demo.mp4` still does not exist, and it is the submission. It outranks every remaining
+item in this document.
