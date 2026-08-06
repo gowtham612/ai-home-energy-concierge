@@ -206,10 +206,10 @@ def read_bulb(retries: int = 3) -> Optional[Dict]:
 
 def _read_bulb_once() -> Optional[Dict]:
     out = board_python(
-        "import asyncio, json\n"
+        "import asyncio, json, os\n"
         "from kasa import Discover, Module\n"
         "async def m():\n"
-        "    d = await Discover.discover_single('192.168.86.49', timeout=8)\n"
+        "    d = await Discover.discover_single(os.environ.get('KASA_LIGHTS_HOST','') or '127.0.0.1', timeout=8)\n"
         "    await d.update()\n"
         "    w = None\n"
         "    try: w = d.modules[Module.Energy].current_consumption\n"
@@ -245,14 +245,14 @@ def set_bulb(on: bool, brightness: Optional[int] = None) -> Optional[Dict]:
     # failure happened on the board and the parse error never reached the caller.
     b = ("            await d.modules[Module.Light].set_brightness(%d)\n" % brightness) if brightness else ""
     out = board_python(
-        "import asyncio, json\n"
+        "import asyncio, json, os\n"
         "from kasa import Discover, Module\n"
         f"WANT = {bool(on)}\n"
         "async def m():\n"
         "    last = None\n"
         "    for attempt in range(4):\n"
         "        try:\n"
-        "            d = await Discover.discover_single('192.168.86.49', timeout=8)\n"
+        "            d = await Discover.discover_single(os.environ.get('KASA_LIGHTS_HOST','') or '127.0.0.1', timeout=8)\n"
         "            await d.update()\n"
         "            if bool(d.is_on) != WANT:\n"
         "                await (d.turn_on() if WANT else d.turn_off())\n"
