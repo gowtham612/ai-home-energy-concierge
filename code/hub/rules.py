@@ -312,13 +312,14 @@ def r5_phantom_standby(snapshot: Dict, now_dt: datetime) -> List[Finding]:
 # --------------------------------------------------------------------------
 
 def r6_peak_hour_heavy_load(snapshot: Dict, now_dt: datetime) -> List[Finding]:
-    from energy_model import (OFF_PEAK_USD_PER_KWH, ON_PEAK_END, ON_PEAK_START,
-                              rate_at)
+    from energy_model import (ON_PEAK_END, ON_PEAK_START, cheapest_rate,
+                              rate_at, tariff_provenance)
 
     findings = []
     rate, period = rate_at(now_dt)
     if period != "on_peak":
         return findings
+    best, _best_period = cheapest_rate(now_dt)
 
     for room in snapshot.get("rooms", {}):
         for name, load in _loads_in_room(snapshot, room).items():
@@ -339,21 +340,30 @@ def r6_peak_hour_heavy_load(snapshot: Dict, now_dt: datetime) -> List[Finding]:
                 seconds_wasted=runtime_s,
                 headline=f"{name.title()} is running during the {_fmt_hour(ON_PEAK_START)}-{_fmt_hour(ON_PEAK_END)} peak window",
                 evidence=[
-                    f"Current rate is ${rate:.2f}/kWh (on-peak) versus ${OFF_PEAK_USD_PER_KWH:.2f}/kWh off-peak",
+                    f"Current rate is ${rate:.5f}/kWh (on-peak) versus "
+                    f"${best:.5f}/kWh super off-peak",
                     f"{name.title()} drawing {load.get('watts', 0):.0f} W for {runtime_s/60:.0f} min",
                     f"On-peak window is {ON_PEAK_START.strftime('%H:%M')}-{ON_PEAK_END.strftime('%H:%M')} daily",
+                    f"Rates: {tariff_provenance()}",
                 ],
-                suggested_actions=["Delay this cycle until 9 PM", "Use the delay-start timer"],
+                suggested_actions=["Delay this cycle until after midnight",
+                                   "Use the delay-start timer"],
             ), now_dt)
 
             # Reframe: the waste is the RATE DELTA, not the whole energy cost.
             # The load itself is legitimate — only its timing is wasteful.
-            delta = f.estimate.kwh * (rate - OFF_PEAK_USD_PER_KWH)
+            #
+            # Measured against SUPER off-peak, not off-peak. A deferral has to
+            # name what it defers TO, and the cheapest window is available every
+            # night — so quoting the off-peak delta understated the saving by
+            # roughly a third while recommending a worse time to run the load.
+            delta = f.estimate.kwh * (rate - best)
             f.estimate.usd = delta
             f.estimate.formula = (
                 f"{f.estimate.watts:.0f} W x {runtime_s:.0f} s = {f.estimate.kwh:.4f} kWh; "
-                f"rate delta ${rate:.2f} - ${OFF_PEAK_USD_PER_KWH:.2f} = ${rate - OFF_PEAK_USD_PER_KWH:.2f}/kWh; "
-                f"{f.estimate.kwh:.4f} kWh x ${rate - OFF_PEAK_USD_PER_KWH:.2f} = ${delta:.3f} avoidable by shifting"
+                f"rate delta ${rate:.5f} on-peak - ${best:.5f} super off-peak "
+                f"= ${rate - best:.5f}/kWh; "
+                f"{f.estimate.kwh:.4f} kWh x ${rate - best:.5f} = ${delta:.3f} avoidable by shifting"
             )
             findings.append(f)
     return findings

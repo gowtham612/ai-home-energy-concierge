@@ -63,7 +63,13 @@ def main() -> int:
         import energy_model
         est = energy_model.waste_estimate(
             "window_ac", 7200, __import__("datetime").datetime(2026, 8, 3, 18, 30))
-        check("energy_model arithmetic", abs(est.usd - 1.276) < 0.01, f"${est.usd:.3f} for 2h A/C on-peak")
+        # 1100 W x 7200 s = 2.2 kWh x $0.69654 summer on-peak = $1.532.
+        # Was 1.276 against the old hardcoded $0.58 "approximate" rate; the
+        # figure moved because the tariff is now the published SDG&E table.
+        # Recompute this from the rate table rather than nudging the constant
+        # if the tariff is updated again.
+        check("energy_model arithmetic", abs(est.usd - 1.532) < 0.01,
+              f"${est.usd:.3f} for 2h A/C on-peak")
         check("formula string present", "kWh" in est.formula and "=" in est.formula)
     except Exception as exc:
         check("energy_model", False, str(exc))

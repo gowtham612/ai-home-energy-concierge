@@ -1,0 +1,75 @@
+{
+  "_comment": [
+    "SDG&E Schedule TOU-DR1 — Residential Time of Use Service.",
+    "Total Electric Rate ($/kWh), transcribed from the utility's own tariff table.",
+    "",
+    "This file exists so the numbers carry their citation. Rates were previously",
+    "two constants in energy_model.py with the note 'approximate SDG&E TOU-DR1' —",
+    "and they were about 40% low and missing an entire pricing tier.",
+    "",
+    "TO UPDATE: SDG&E republishes this table on each rate change. Download the",
+    "current 'Schedule TOU-DR1 Total Rates Table' PDF, transcribe the Total",
+    "Electric Rate column, and bump effective_date. Do not interpolate or round."
+  ],
+
+  "schedule": "TOU-DR1",
+  "utility": "San Diego Gas & Electric",
+  "effective_date": "2026-01-01",
+  "source_url": "https://www.sdge.com/sites/default/files/regulatory/1-1-26%20Schedule%20TOU-DR1%20Total%20Rates%20Table.pdf",
+  "source_note": "Total Electric Rate column (UDC + EECC + WF-NBC/DWR-BC), bundled residential customer.",
+
+  "seasons": {
+    "summer": {
+      "months": [6, 7, 8, 9],
+      "on_peak": 0.69654,
+      "off_peak": 0.47560,
+      "super_off_peak": 0.38818
+    },
+    "winter": {
+      "months": [10, 11, 12, 1, 2, 3, 4, 5],
+      "on_peak": 0.62200,
+      "off_peak": 0.54019,
+      "super_off_peak": 0.44933
+    }
+  },
+
+  "periods": {
+    "_comment": [
+      "Hours are the same year-round; only the PRICE changes by season.",
+      "On-Peak 4-9 PM every day. Super Off-Peak differs weekday vs weekend.",
+      "The weekday 10:00-14:00 super-off-peak block was previously March/April",
+      "only and is now year-round — see periods_source_url."
+    ],
+    "on_peak": [["16:00", "21:00"]],
+    "super_off_peak_weekday": [["00:00", "06:00"], ["10:00", "14:00"]],
+    "super_off_peak_weekend": [["00:00", "14:00"]],
+    "off_peak": "everything not listed above"
+  },
+  "periods_source_url": "https://www.sdge.com/super-off-peak-residential",
+
+  "other_charges": {
+    "base_services_charge_usd_per_day": 0.79343,
+    "base_services_charge_drah_usd_per_day": 0.39688,
+    "base_services_charge_fera_usd_per_day": 0.39688,
+    "baseline_credit_usd_per_kwh": -0.10905,
+    "_comment": [
+      "The base services charge is a fixed daily charge and is NOT used in waste",
+      "arithmetic: turning a light off does not change it, so including it would",
+      "overstate every saving. Recorded here because it is part of the tariff and",
+      "someone will ask why the modelled bill is lower than a real one.",
+      "The baseline credit applies to usage up to 130% of baseline allowance and",
+      "is likewise not modelled — it depends on the household's allowance, which",
+      "this system does not know."
+    ]
+  },
+
+  "not_confirmed_from_primary_source": {
+    "season_month_boundaries": [
+      "The rate table is split into Summer and Winter blocks but does not print",
+      "the date ranges. June-September summer is taken from secondary sources and",
+      "is the one value here NOT read off an SDG&E document. It changes only WHICH",
+      "column applies, never a rate. Correct SEASONS in energy_model.py if a",
+      "primary source says otherwise."
+    ]
+  }
+}
