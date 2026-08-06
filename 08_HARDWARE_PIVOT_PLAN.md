@@ -320,7 +320,7 @@ the code already anticipates **`lights`** and **`ac`**.
   the system declining its own advice for safety, and it is the strongest moment
   in the demo.
 - Show the **audit formula** — every recommendation carries a `formula` string
-  (e.g. `1100 W x 7200 s = 2.2000 kWh; ... x $0.58/kWh (on_peak) = $1.276`).
+  (e.g. `1100 W x 7200 s = 2.2000 kWh; ... x $0.69654/kWh (on_peak) = $1.532`).
   Surfacing it supports the project's "the LLM narrates, Python computes" claim.
 - Existing pages use a dark theme; match `code/dashboard/index.html` for
   consistency if the new UI is to sit alongside it.
