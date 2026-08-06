@@ -282,6 +282,19 @@ def set_bulb(on: bool, brightness: Optional[int] = None) -> Optional[Dict]:
     return None
 
 
+
+def mcu_send_line(line: str) -> bool:
+    """Send one command line to the MCU over the router's monitor socket."""
+    snippet = ("import socket, time\n"
+               "s = socket.create_connection(('127.0.0.1', 7500), 5); s.settimeout(2)\n"
+               "time.sleep(0.4)\n"
+               f"s.sendall(b'{line}\\n')\n"
+               "time.sleep(1.0)\n"
+               "s.close()\n"
+               "print('SENT')")
+    return "SENT" in board_python(snippet, timeout=60)
+
+
 def press_button(which: str) -> bool:
     """Simulate a Modulino button press by bumping the MCU's own counter.
 
@@ -628,10 +641,342 @@ def shot1(browser: bool) -> None:
 
 # ------------------------------------------------------------------------ main
 
+# ==========================================================================
+# Shots 2-6. Each asserts on STRUCTURE, never on wording: an LLM answer is not
+# reproducible text, so a test that greps for a phrase fails on a good answer
+# and passes on a bad one. What must hold is that the NPU answered (not the
+# template), and that the provenance verdict is the one this beat is about.
+# ==========================================================================
+
+ASK_TIMEOUT = 90
+
+
+def _clock_offset(hour: int) -> float:
+    """Seconds to add to wall time so the hub believes it is `hour` o'clock."""
+    from datetime import datetime
+    now = datetime.now()
+    return (now.replace(hour=hour, minute=0, second=0) - now).total_seconds()
+
+
+def mqtt_publish(topic: str, payload: Dict) -> bool:
+    try:
+        import paho.mqtt.client as mqtt
+    except ImportError:
+        return False
+    try:
+        c = mqtt.Client(client_id="autopilot-pub")
+    except Exception:
+        c = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id="autopilot-pub")
+    try:
+        c.connect(os.environ.get("MQTT_HOST", "127.0.0.1"),
+                  int(os.environ.get("MQTT_PORT", "1883")), 30)
+        c.loop_start(); c.publish(topic, json.dumps(payload)); time.sleep(0.8)
+        c.loop_stop(); c.disconnect()
+        return True
+    except Exception as exc:
+        Step.info(f"MQTT publish failed: {type(exc).__name__}: {exc}")
+        return False
+
+
+def ask_via_page(question: str, expect_provenance: Optional[str] = None) -> Optional[Dict]:
+    """Cue the /ask PAGE, then confirm the answer through the API.
+
+    The cue is what puts the question on screen; the API call is how this script
+    learns what came back. Both hit the same model and the same verifier, so the
+    check describes what the viewer just watched.
+    """
+    hub_post("/api/demo/cue", {"control": "ask", "value": question,
+                               "note": "autopilot"})
+    Step.info(f'cued the /ask page: "{question}"')
+
+    t0 = time.time()
+    rq = urllib.request.Request(HUB + "/api/ask",
+                                data=json.dumps({"question": question}).encode(),
+                                headers={"Content-Type": "application/json"},
+                                method="POST")
+    acc, done = "", None
+    try:
+        with urllib.request.urlopen(rq, timeout=ASK_TIMEOUT) as r:
+            for raw in r:
+                line = raw.decode("utf-8", "ignore").strip()
+                if not line:
+                    continue
+                try:
+                    o = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if o.get("delta"):
+                    acc += o["delta"]
+                if o.get("done"):
+                    done = o
+    except Exception as exc:
+        Step.fail(f"/ask failed: {type(exc).__name__}: {exc}")
+        return None
+
+    if done is None:
+        Step.fail("no completion record from /ask")
+        return None
+
+    dt = time.time() - t0
+    by, prov = done.get("answered_by"), done.get("provenance")
+    if by == "llm":
+        Step.ok(f"answered on the NPU in {dt:.1f}s, provenance={prov}")
+    else:
+        Step.fail(f"answered by {by!r}, not the NPU — GenieX unreachable?")
+
+    text = (acc or done.get("answer") or "").strip()
+    for line in text.splitlines():
+        Step.info(f"| {line}")
+
+    if expect_provenance and prov != expect_provenance:
+        if expect_provenance == "unverified":
+            Step.info(f"expected an UNVERIFIED badge, got {prov!r}. The model "
+                      f"behaved this time — not a failure, but this beat is "
+                      f"about catching it. Retake, or use hub/provenance.py.")
+        else:
+            Step.fail(f"expected provenance={expect_provenance!r}, got {prov!r}")
+    return done
+
+
+def shot2_tier1() -> None:
+    """3 AM, A/C on, room occupied. Rules fire nothing; the learned model does."""
+    print(); print(c("=" * 74, C_HDR))
+    print(c("SHOT 2 - tier 1: the learned detector catches what no rule can", C_HDR))
+    print(c("=" * 74, C_HDR))
+
+    Step.start("Set the scene: 3 AM, A/C running, someone home",
+               "R1-R6 produce NOTHING (occupied, temp in band, off-peak) - only "
+               "the learned detector should fire")
+    mqtt_publish("home/context/clock", {"offset_s": _clock_offset(3)})
+    command_load("ac", "on")
+    hub_post("/api/demo/cue", {"control": "occupancy", "value": True,
+                               "note": "autopilot: someone is home at 3 AM"})
+    hub_post("/api/presence", {"presence": "home", "distance_m": 0})
+    time.sleep(2)
+    clock = (hub_get("/api/state").get("tariff") or {}).get("clock")
+    Step.ok(f"hub clock now {clock}")
+
+    Step.start("Wait for the detectors",
+               "a finding tagged detector=learned, with an anomaly score")
+    learned = None
+    for _ in range(20):
+        time.sleep(3)
+        recos = hub_get("/api/state").get("recos") or []
+        learned = next((r for r in recos if r.get("detector") == "learned"), None)
+        if learned:
+            break
+    if learned:
+        Step.ok(f"learned finding {learned['id']} score={learned.get('anomaly_score')}")
+        rule_based = [r for r in (hub_get('/api/state').get('recos') or [])
+                      if r.get('detector') != 'learned']
+        Step.info(f"rule-based findings alongside it: {len(rule_based)}")
+    else:
+        Step.fail("no learned finding surfaced - is AI_ANOMALY=1 on the hub?")
+
+    Step.start("Ask the system about it", "NPU answers citing the learned score")
+    ask_via_page("Is anything unusual right now?", expect_provenance="verified")
+
+
+def shot3_tier2() -> None:
+    """Two findings at once. The model ranks and defers; the fallback cannot."""
+    print(); print(c("=" * 74, C_HDR))
+    print(c("SHOT 3 - tier 2: the model decides the ORDER, not just the words", C_HDR))
+    print(c("=" * 74, C_HDR))
+
+    Step.start("Back to evening peak, two things wrong at once",
+               "A/C wasting while away (pure waste) AND the dryer in the peak "
+               "window (legitimate, only mistimed)")
+    mqtt_publish("home/context/clock", {"offset_s": 0.0})
+    hub_post("/api/demo/cue", {"control": "occupancy", "value": False,
+                               "note": "autopilot: everyone out"})
+    hub_post("/api/presence", {"presence": "away", "distance_m": 2400})
+    command_load("lights", "on")
+    hub_post("/api/load", {"key": "living/dryer", "state": "on", "watts": 2400})
+    Step.ok("scene set")
+
+    Step.start("Wait for the planner", "a plan ranking the findings, planned_by=llm")
+    plan = None
+    for _ in range(24):
+        time.sleep(3)
+        p = hub_get("/api/state").get("plan") or {}
+        if p.get("plan"):
+            plan = p
+            break
+    if not plan:
+        Step.fail("no plan produced - is AI_PLAN=1 on the hub?")
+    else:
+        if plan.get("planned_by") == "llm":
+            Step.ok(f"planned_by=llm in {plan.get('latency_s')}s, "
+                    f"provenance={plan.get('provenance')}")
+        else:
+            Step.fail(f"planned_by={plan.get('planned_by')!r} - the deterministic "
+                      f"fallback ran, so this beat shows nothing the rules "
+                      f"could not already do")
+        Step.info(f"situation: {plan.get('situation')}")
+        for it in plan.get("plan", []):
+            Step.info(f"  {it['rank']}. {it['finding_id']:24} {it['action']}"
+                      f"   <- {it['why_this_order']}")
+        for d in plan.get("deferred", []):
+            Step.info(f"  DEFERRED {d['finding_id']}: {d['reason']}")
+
+    Step.start("Ask what to do first", "NPU explains the ordering")
+    ask_via_page("What should I do first?", expect_provenance="verified")
+
+
+def shot4_refusal() -> None:
+    """Knob past the comfort limit -> Approve -> 409. Then ask it why."""
+    print(); print(c("=" * 74, C_HDR))
+    print(c("SHOT 4 - the refusal: it declines to execute its own advice", C_HDR))
+    print(c("=" * 74, C_HDR))
+
+    Step.start("Turn the knob past 27 C (simulated press, real encoder)",
+               "temp_c climbs to ~29.5 - driven through the KNOB, not by writing "
+               "temp_c, so a broken knob path fails here instead of passing")
+    if not mcu_send_line("SIMKNOB hot"):
+        Step.fail("could not reach the MCU")
+        return
+    hot = None
+    for _ in range(14):
+        time.sleep(2)
+        t = (hub_get("/api/state").get("rooms") or {}).get("living", {}).get("temp_c")
+        if t and t > 27.0:
+            hot = t
+            break
+    if hot:
+        Step.ok(f"room now {hot} C - above the 27 C comfort limit")
+    else:
+        Step.fail("temperature never rose above 27 C")
+        return
+
+    Step.start("Approve switching the A/C off anyway",
+               "HTTP 409, nothing switches, a stated reason")
+    rec = None
+    for _ in range(16):
+        time.sleep(3)
+        rec = next((r for r in (hub_get("/api/state").get("recos") or [])
+                    if r.get("load_key", "").endswith("/ac") or "ac" in r["id"]), None)
+        if rec:
+            break
+    if not rec:
+        Step.fail("no A/C finding to approve")
+    else:
+        code, body = hub_post("/api/apply", {"reco_id": rec["id"], "action": "off",
+                                             "approved_by": "autopilot"})
+        if code == 409 and body.get("refused"):
+            Step.ok(f"HTTP 409 REFUSED - gate={body.get('gate')}")
+            Step.info(f"reason: {body.get('reason')}")
+        else:
+            Step.fail(f"expected 409, got {code} - the guardrail did not fire")
+
+    Step.start("Ask the system to explain its own refusal",
+               "NPU cites the 27 C limit rather than recommending the switch-off")
+    ask_via_page("Why did you refuse to turn off the air conditioner?",
+                 expect_provenance="verified")
+
+
+def shot5_provenance() -> None:
+    """The model does arithmetic it was told not to, and gets caught."""
+    print(); print(c("=" * 74, C_HDR))
+    print(c("SHOT 5 - caught: every number checked against its source", C_HDR))
+    print(c("=" * 74, C_HDR))
+    Step.start("Ask a question that tempts arithmetic",
+               "an AMBER 'unverified' badge listing a figure that was never in "
+               "the digest")
+    # "shift the dryer to 9 PM" USED to trigger this reliably (6/6). It stopped
+    # once off_peak_rate was added to the digest — with the figure available the
+    # model no longer needs to compute it, so the honesty fix removed the demo
+    # beat. Asking for a SUM is more robust and a better beat anyway: adding two
+    # numbers we supplied is the most obviously-forbidden arithmetic there is,
+    # and the easiest to explain on camera. Measured 2/2 against the current
+    # digest — still a model output, not a guarantee.
+    ask_via_page("What is the combined cost of all the findings?",
+                 expect_provenance="unverified")
+
+
+def shot6_close() -> None:
+    """Comfort restored, approve for real, watch the hardware obey."""
+    print(); print(c("=" * 74, C_HDR))
+    print(c("SHOT 6 - the loop closes on real hardware", C_HDR))
+    print(c("=" * 74, C_HDR))
+
+    Step.start("Knob back to comfortable", "guardrail no longer blocks an approve")
+    mcu_send_line("SIMKNOB comfy")
+    for _ in range(14):
+        time.sleep(2)
+        t = (hub_get("/api/state").get("rooms") or {}).get("living", {}).get("temp_c")
+        if t and t < 27.0:
+            Step.ok(f"room back to {t} C")
+            break
+    else:
+        Step.fail("temperature did not come back down")
+
+    Step.start("Make sure the bulb is on so there is something to switch",
+               "living/lights on, ~10.8 W measured")
+    command_load("lights", "on")
+    for _ in range(10):
+        time.sleep(3)
+        if load_state("living/lights").get("state") == "on":
+            break
+    Step.ok(f"lights: {load_state('living/lights')}")
+
+    Step.start("Approve the lights finding for real",
+               "bulb goes dark, watts fall to 0.0, saving books as REALIZED")
+    # Take whatever finding is actually live, preferring lights because the bulb
+    # is the visible one. Insisting on a lights finding failed the first run:
+    # R1 needs UNOCCUPIED_GRACE_S (10 min) of an empty room, and the demo has
+    # only been running a few minutes. A demo step that depends on a wall clock
+    # it does not control will fail unpredictably.
+    rec = None
+    for _ in range(16):
+        time.sleep(3)
+        recos = hub_get("/api/state").get("recos") or []
+        rec = (next((r for r in recos if "lights" in r["id"]), None)
+               or next((r for r in recos), None))
+        if rec:
+            break
+    if not rec:
+        Step.fail("no finding at all to approve")
+        return
+    target = "lights" if "lights" in rec["id"] else rec["id"].rsplit("-", 1)[-1]
+    Step.info(f"approving {rec['id']} (load: {target})")
+    code, body = hub_post("/api/apply", {"reco_id": rec["id"], "action": "off",
+                                         "approved_by": "autopilot"})
+    if code != 200:
+        Step.fail(f"approve returned {code}")
+        return
+    Step.ok(f"approved {rec['id']}, realized ${body.get('realized_usd')}")
+
+    time.sleep(8)
+    if target == "lights":
+        bulb = read_bulb(retries=3)
+        if bulb and bulb.get("on") is False:
+            Step.ok(f"BULB IS OFF, {bulb.get('watts')} W - confirmed by the device")
+        else:
+            Step.fail(f"bulb did not switch: {bulb}")
+    else:
+        st = load_state(f"living/{target}")
+        if st.get("state") == "off":
+            Step.ok(f"living/{target} is off at {st.get('watts')} W "
+                    f"(metered={st.get('metered')})")
+        else:
+            Step.fail(f"living/{target} did not switch: {st}")
+    s = hub_get("/api/state")
+    Step.info(f"realized total: {s.get('realized')}")
+
+    Step.start("Three tiers, measured", "us -> ms -> s, each where it belongs")
+    Step.info("  edge anomaly, UNO Q A53    30.6 us")
+    Step.info("  provenance check           110 us")
+    Step.info("  rules engine, 7 rules      0.014 ms")
+    Step.info("  narration, Hexagon NPU     3.3 s")
+    Step.info("  Q&A round-trip, NPU        ~3.4 s")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Autonomous demo driver")
     ap.add_argument("--no-browser", action="store_true", help="skip opening windows")
     ap.add_argument("--check", action="store_true", help="preflight only, change nothing")
+    ap.add_argument("--shots", default="all",
+                    help="comma list: 1,2,3,4,5,6 or 'all' (default)")
     args = ap.parse_args()
 
     print(c("\nAUTONOMOUS DEMO — AI Home Energy Concierge", C_HDR))
@@ -646,7 +991,14 @@ def main() -> int:
         print(c("Preflight only — nothing was changed.", C_OK))
         return 0
 
-    shot1(browser=not args.no_browser)
+    wanted = ([int(x) for x in args.shots.split(",") if x.strip().isdigit()]
+              if args.shots != "all" else [1, 2, 3, 4, 5, 6])
+    seq = [(1, lambda: shot1(browser=not args.no_browser)),
+           (2, shot2_tier1), (3, shot3_tier2), (4, shot4_refusal),
+           (5, shot5_provenance), (6, shot6_close)]
+    for n, fn in seq:
+        if n in wanted:
+            fn()
 
     print()
     print(c("=" * 74, C_HDR))

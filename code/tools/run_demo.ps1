@@ -3,14 +3,15 @@
 
       .\tools\run_demo.ps1
 
-  Opens three windows tiled on the primary display:
+  Opens four panes tiled on the primary display:
 
       +---------------------------+---------------------------+
       |  SIMULATOR                |  DASHBOARD                |
-      |  (watch presence move)    |  (watch watts drop)       |
+      |  (presence moves itself)  |  (watts drop to 0.0)      |
       +---------------------------+---------------------------+
-      |  SCRIPT OUTPUT - what it is doing and what it EXPECTS  |
-      +-------------------------------------------------------+
+      |  ASK  (questions type     |  SCRIPT OUTPUT            |
+      |  themselves; badge)       |  (intent -> expect -> got) |
+      +---------------------------+---------------------------+
 
   Why a launcher instead of just running the script: demo_autopilot.py opens the
   two browser windows itself, but its own output goes to whatever terminal
@@ -83,21 +84,24 @@ if (-not $NoBrowser) {
     } else {
         # --app gives a chromeless window: no tab strip or address bar stealing
         # vertical space, which matters when the window is only ~55% of screen.
+        # Four panes. /ask earns one because it is the only surface where the
+        # AI is visibly doing something - the demo leans on it four times.
         $panes = @(
-            @{ url = "$hub/simulator"; x = 0;      profile = "quad_demo_sim"  },
-            @{ url = "$hub/";          x = $halfW; profile = "quad_demo_dash" }
+            @{ url = "$hub/simulator"; x = 0;      y = 0;     h = $topH; profile = "quad_demo_sim"  },
+            @{ url = "$hub/";          x = $halfW; y = 0;     h = $topH; profile = "quad_demo_dash" },
+            @{ url = "$hub/ask";       x = 0;      y = $botY; h = $botH; profile = "quad_demo_ask"  }
         )
         foreach ($p in $panes) {
             Start-Process $browser -ArgumentList @(
                 "--app=$($p.url)",
-                "--window-position=$($p.x),0",
-                "--window-size=$halfW,$topH",
+                "--window-position=$($p.x),$($p.y)",
+                "--window-size=$halfW,$($p.h)",   # no ternary: Windows PowerShell 5.1
                 "--user-data-dir=$env:TEMP\$($p.profile)",
                 "--no-first-run", "--no-default-browser-check"
             )
             Start-Sleep -Milliseconds 1400
         }
-        Write-Host "simulator (left) and dashboard (right) opened" -ForegroundColor Green
+        Write-Host "simulator | dashboard | ask  opened" -ForegroundColor Green
         Write-Host "giving them a moment to connect their websockets..." -ForegroundColor DarkGray
         Start-Sleep -Seconds 4
     }
@@ -126,7 +130,7 @@ public class W2 {
       IntPtr h, IntPtr a, int X, int Y, int cx, int cy, uint f);
 }
 '@
-[void][W2]::SetWindowPos([W2]::GetConsoleWindow(), [IntPtr]::Zero, 0, $botY, $sw, $botH, 0x0040)
+[void][W2]::SetWindowPos([W2]::GetConsoleWindow(), [IntPtr]::Zero, $halfW, $botY, $halfW, $botH, 0x0040)
 "@
 
 $inner = "$selfPos; `$host.UI.RawUI.WindowTitle = 'QUAD demo - script output'; cd '$code'; & '$py' tools\demo_autopilot.py --no-browser"
@@ -136,6 +140,7 @@ Write-Host "script output opened across the bottom" -ForegroundColor Green
 Write-Host ""
 Write-Host "Watch for:" -ForegroundColor Cyan
 Write-Host "  simulator : the Away button flashes teal and moves by itself"
+Write-Host "  ask pane  : questions type themselves; watch the verified/unverified badge"
 Write-Host "  dashboard : living/lights goes on at ~10.8 W, then to 0.0 W"
 Write-Host "  the bulb  : physically switches off when the button is 'pressed'"
 Write-Host "  terminal  : each step prints what it EXPECTS before the result"

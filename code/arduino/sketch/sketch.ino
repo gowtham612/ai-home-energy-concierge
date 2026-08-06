@@ -607,6 +607,40 @@ void handleCommand(char *line) {
   }
 #endif
 
+#if USE_KNOB
+  /* `SIMKNOB [comfy|hot]` — a simulated knob press, for the autonomous demo.
+   *
+   * Drives the SAME knob.set() the physical press drives, so temp_c changes the
+   * only way it ever changes: the encoder moves, and the next telemetry line
+   * carries the new value. Nothing here writes temp_c directly — if it did, the
+   * script could "prove" the R7 refusal while the knob path was broken.
+   *
+   * With no argument it toggles, exactly like the press. With an explicit
+   * target the demo can drive the refusal beat deterministically instead of
+   * depending on which side of the midpoint the dial happens to be. */
+  if (strcmp(verb, "SIMKNOB") == 0) {
+    char *want = strtok(NULL, " \t");
+    float target;
+    if (want != NULL && (want[0] == 'h' || want[0] == 'H')) {
+      target = PRESET_HOT_C;
+    } else if (want != NULL && (want[0] == 'c' || want[0] == 'C')) {
+      target = PRESET_COMFY_C;
+    } else {
+      target = (tempC > (PRESET_COMFY_C + PRESET_HOT_C) / 2.0)
+                 ? PRESET_COMFY_C : PRESET_HOT_C;
+    }
+    if (haveKnob) {
+      knob.set((int16_t)(((target - TEMP_MIN_C) * KNOB_COUNTS_FULL)
+                         / (TEMP_MAX_C - TEMP_MIN_C)));
+      chirp(880);
+    }
+    Serial.print(F("{\"ack\":\"simknob\",\"target_c\":"));
+    Serial.print(target, 1);
+    Serial.println(F("}"));
+    return;
+  }
+#endif
+
 #if NET_STATUS_LED
   /* `NET <ssid> <mqtt> <kasa>` — readiness push from the Linux side.
    *

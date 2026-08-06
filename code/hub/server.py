@@ -474,7 +474,7 @@ async def api_demo_cue(request: Request):
     """
     body = await request.json()
     control = str(body.get("control", "")).strip()
-    if control not in ("presence", "occupancy", "lux", "humidity", "temp_c"):
+    if control not in ("presence", "occupancy", "lux", "humidity", "temp_c", "ask"):
         return JSONResponse({"error": f"unknown control {control!r}"}, status_code=400)
     with STORE.lock:
         STORE._demo_cue_seq += 1
