@@ -1126,3 +1126,101 @@ mixed-provenance test. Harmless; clear it by restarting the hub.
 - **Stale-data indicator** — the dashboard showed 86-minute-old readings as if
   live during this session. Proposed but NOT built: grey out anything older than
   ~15 s. Worth doing before the demo.
+
+---
+
+# §19 AI enhancement plan (09_AI_ENHANCEMENT_PLAN.md) — all six tasks done
+
+All of P0-A → P3-F implemented, gated and pushed. `smoke_test.py` 32/32 after
+every task.
+
+## 19.1 ⚠ Run the gate with the board publisher STOPPED
+
+`smoke_test.py` asserts `total_watts == 1340` from its own fixtures. The live
+publisher republishes the REAL bulb (1.7 W) every 5 s and overwrites them, giving
+a spurious **23/25**. It is interference, not a regression.
+
+```bash
+adb shell "pkill -9 -f '[u]no_q_publisher.py'"
+python smoke_test.py            # 32/32
+# then relaunch the publisher
+```
+
+## 19.2 The plan's latency budget was wrong, and why
+
+Plan assumed ~3.1 s for GenieX. Measured: **11.4 s**, because latency tracks
+**output length**, steeply:
+
+| output | latency |
+|---|---|
+| 135 chars | 2.6 s |
+| 378 chars | 5.5 s |
+| 1060 chars | 11.4 s |
+| ~600 tokens | **~135 s** |
+
+`llm.py` asked for `max_tokens=300` with no brevity instruction, so the model
+rambled to ~1060 chars and blew its own 8 s timeout — **every narration had been
+silently falling back to the template**, while README quoted 3110 ms. Capping
+output at 160 tokens + a brevity instruction + a 20 s timeout gives **2.3 s and
+`narrated_by=llm`**: 5× faster *and* actually using the NPU. Approved by the user
+before changing shared code.
+
+## 19.3 Measured, on real silicon
+
+| Tier | Where | Measured |
+|---|---|---|
+| 1 · edge anomaly | **UNO Q A53**, pure Python | **30.6 µs** p50 |
+| — provenance check | hub | 110 µs |
+| — rules engine | hub | 0.014 ms |
+| 2 · narration | Hexagon NPU | 3.33 s |
+| 2 · plan synthesis | Hexagon NPU | 11.5 s, **per change** |
+| 3 · Q&A | Hexagon NPU | ~3.4 s, first token 2.4 s |
+
+Anomaly model: 14 simulated days, 840 samples, **holdout 0.9714**, precision
+0.947, recall 0.900, seed 20260806. **Training data is SIMULATED** — stated in
+the model file, in `model_provenance()`, and in every evidence line.
+
+## 19.4 Two bugs the rehearsal caught — read these
+
+**(a) A learned finding switched the WRONG DEVICE and skipped the safety gate.**
+`server.py::_load_from_rule` maps `rule_name` → load and defaulted to `"lights"`.
+A learned finding carries `rule_name="learned_anomaly"`, absent from that table,
+so `learned-living-ac` resolved to `living/lights`. Approving it would have
+published `home/command/living/lights` — and the comfort guardrail, which keys
+off the load name, saw "lights" and allowed it at 29.5 °C. Two failures from one
+silent default. Fixed by carrying the Finding's real `load_key` onto the
+Recommendation; the six mapped rules are byte-identical. **Now HTTP 409.**
+
+**(b) `detector` died at the narration boundary.** It lived on the Finding but
+not the Recommendation, so every dashboard card looked equally rule-derived.
+Now carried through and rendered as a `rule` / `learned · 0.999` badge.
+
+## 19.5 §5 rehearsal result
+
+| Step | Result |
+|---|---|
+| 1 · rule finding ranked by planner | ✅ `planned_by=llm`, provenance verified |
+| 2 · learned finding at 3 AM | ✅ score 0.805, tagged `learned` |
+| 3 · approve → real bulb dark | ✅ 1.7 W → 0.0 W, `source=kasa ok=True`, booked |
+| 4 · R7 refusal | ✅ **HTTP 409** (after fixing 19.4a) |
+| 5 · /ask on the NPU | ✅ 4.1 s, `PROVENANCE=VERIFIED` |
+| 6 · GenieX dead | ✅ all paths degrade to `template`, still functional |
+
+Step 6 used an unreachable `LLM_BASE_URL` rather than killing the user's GenieX
+service — same timeout/exception path, no risk of leaving the demo broken.
+
+## 19.6 The provenance verifier earned its place
+
+It caught the model doing forbidden arithmetic, unprompted, during development:
+
+```
+Q: "What if I shift the dryer to 9 PM?"
+A: "...reducing cost from $0.39 to $0.19, saving $0.20."   -> UNVERIFIED [0.19]
+```
+
+`$0.39` was in the digest; `$0.19` was not. Nobody anticipated that specific
+failure — the check found it. Cost: 110 µs.
+
+## 19.7 Flags
+
+All OFF by default. `AI_ANOMALY=1` `AI_PLAN=1` `AI_ASK=1`. Q&A page at `/ask`.
