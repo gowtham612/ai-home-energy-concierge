@@ -163,14 +163,16 @@ def deterministic_answer(question: str, state: Dict) -> str:
             r = learned[0]
             return (f"Yes — the learned detector flagged {r.get('title','a load')} "
                     f"(score {r.get('anomaly_score')}). It is a learned score on "
-                    f"simulated training data, not a measurement.")
+                    f"SIMULATED training data, not a measurement.")
         return "Nothing is scoring anomalous right now."
 
     if "first" in q or "should i do" in q:
         if recos:
             r = max(recos, key=lambda x: x.get("usd", 0))
+            # Format explicitly: a raw float renders as $0.0004174503347608778,
+            # which reads as a bug to anyone looking at the screen.
             return (f"Start with: {r.get('title','the largest finding')} "
-                    f"— ${r.get('usd',0)} avoidable.")
+                    f"— ${float(r.get('usd', 0) or 0):.3f} avoidable.")
         return "Nothing needs action right now."
 
     if "bill" in q or "high" in q or "why" in q:
