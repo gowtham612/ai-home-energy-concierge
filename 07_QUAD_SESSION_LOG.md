@@ -18,6 +18,34 @@ credential is referenced by variable name and storage location only; see
 
 ## 0. Resume point — read this first
 
+> ### ⚡ LATEST STATE (2026-08-06) — read §18 before anything else
+>
+> **The network moved.** Everything is now on a home LAN, NOT the old
+> `172.20.10.x` phone hotspot:
+>
+> | | |
+> |---|---|
+> | PC (broker + hub) | `192.168.86.34` |
+> | UNO Q board | `192.168.86.51` (Wi-Fi SSID `ArtiFi`) |
+> | `lights` — KL120 bulb "Bedroom light 2" | `192.168.86.49` |
+> | `ac` — HS110 plug "Space heater" | `192.168.86.20` (HS110 = real energy metering) |
+>
+> MQTT goes over **Wi-Fi** now (`MQTT_HOST=192.168.86.34`), not the USB tunnel.
+> `adb reverse tcp:1883` is still a valid fallback if the LAN path dies.
+>
+> **Modulino Buttons work** (§17): A = toggle bulb, B = toggle heater,
+> C = rescan bus. LEDs show *device-confirmed* state.
+>
+> **⚠ The single worst trap on this project — read §18.1.** If the board looks
+> alive but the hub gets nothing, suspect **CRLF in `board.env`** before
+> anything else. It makes the publisher serve *invented* sensor data while
+> looking perfectly healthy. Check first:
+> ```bash
+> adb shell "grep -c $'' /home/arduino/ai-home-energy-concierge/code/arduino/board.env"
+> ```
+> Non-zero = that is your bug. Fix: `sed -i 's/$//' board.env` and restart
+> the publisher.
+
 **Current position (2026-08-05): the full Archetype E loop is CLOSED and
 verified on real hardware.** Approve on the hub → the actual Kasa bulb
 physically goes dark, confirmed by its own energy meter (10.8 W → 0.0 W).
@@ -985,3 +1013,116 @@ which is the correct honest answer, not a fault in the button path.
 
 The hotspot is flaky: restoring the bulb took three discovery attempts before
 one answered. Worth knowing before blaming code on demo day.
+
+---
+
+# §18 Session of 2026-08-05/06 — fixes, and the CRLF trap
+
+## 18.1 ⚠⚠ THE CRLF TRAP — most dangerous bug in the project
+
+**Symptom:** the board looks completely healthy — publisher running, both Kasa
+devices bound, a plausible temperature updating once a second on the dashboard —
+but the hub receives **nothing**, and the temperature you are watching is
+**invented**. The real knob sat still at 21.9 °C while the dashboard showed a
+drifting 22.5–23.6 °C.
+
+**Cause:** `reconfigure_network.py` wrote `board.env` from Windows in text mode,
+so every `\n` became `\r\n`. `board.env` is sourced by **bash on the board**,
+which keeps the CR as part of the value:
+
+```
+MCU_TCP_HOST = '127.0.0.1\r'
+MQTT_HOST    = '192.168.86.34\r'
+```
+
+Both hostnames are invalid. The MCU connect fails → publisher falls back to
+synthetic data. The MQTT connect fails → nothing reaches the hub. Nothing errors
+out; it just quietly lies.
+
+**This has now happened twice.** Defended twice as of `42b290a`:
+1. the tool writes with `newline="\n"`
+2. it runs `sed -i 's/\r$//' board.env` on the board after pushing
+
+**Diagnose in one command:**
+```bash
+adb shell "grep -c $'\r' /home/arduino/ai-home-energy-concierge/code/arduino/board.env"
+```
+Non-zero → this is your bug.
+
+## 18.2 Two hardening changes that came out of it
+
+- **The MCU probe was one-shot.** `arduino-router` restarts with the sketch and
+  takes seconds to return after a re-plug; losing that race committed the
+  publisher to synthetic data *for its whole lifetime*. Now polls for
+  `MCU_WAIT_S` (default 30 s, env-overridable), and the fallback prints a banner
+  saying plainly that every value below is invented.
+- **`fake_lines()` declared nothing.** The hub merges room state with
+  `{**prev, **payload}`, so a `temp_src:"knob_sim"` from an earlier real run
+  **survived** while invented values overwrote `temp_c` — a synthetic reading
+  wearing the physical knob's label. Now stamps `*_src="synthetic"` on every
+  line. **A generated value must never inherit a measured value's label.**
+
+## 18.3 Simulator + dashboard (`ca725c6`)
+
+- **Approve returned HTTP 400 on every recommendation** (§16): the card sent
+  `r.actions` prose ("Turn off the ac") as the API `action`, which only accepts
+  `on`/`off`. One button per card now sends the real verb.
+- **Websocket reconnect loop.** `connectWS()` closed the old socket, which fired
+  *its* `onclose`, which scheduled another `connectWS()`; `onopen` reset
+  `wsRetry=0` so backoff never grew. One blip → permanent 1 Hz loop flooding the
+  log. Handlers are now detached before closing. Logging follows real
+  transitions: one line on connect, one per genuine drop, one on recovery.
+- **Dashboard now labels provenance.** Real and simulated loads always shared the
+  table but rendered identically with a literal `—` in the Detail column. The hub
+  has always sent `metered`; the dashboard never read it. Now shows
+  "real device · measured" vs "simulated · modelled".
+- **Failed actuations no longer book a saving** (§16.2), and duplicate
+  recommendation cards are collapsed (§16.3).
+
+## 18.4 Git identity corrected
+
+All commits were authored as `Chris <hl3838@columbia.edu>` — the machine's global
+git identity, unrelated to the team. The *push* credential was always correct
+(`gh auth status` → `gowtham612` active, `repo` scope); author identity and push
+credential are independent, which is why pushes succeeded while commits read as
+someone else.
+
+- repo-**local** identity set to `gowtham612 <gowthamraj.b@gmail.com>` (global
+  left alone — shared machine)
+- all 18 commits rewritten and force-pushed with `--force-with-lease`
+- verified via the GitHub API: **18/18 → `author=gowtham612`**, zero unlinked
+- content untouched (`git diff pre-author-rewrite HEAD` empty)
+- safety net kept **locally, unpushed**: tag `pre-author-rewrite` and branch
+  `backup-before-author-rewrite` at the original `ab1feec`
+
+**SHAs all changed.** Anyone holding a clone must
+`git fetch && git reset --hard origin/main` — a plain `git pull` will try to
+merge the old history back.
+
+## 18.5 State at handoff
+
+| Piece | State |
+|---|---|
+| Board | `192.168.86.51`, USB attached, publisher running |
+| MCU | real knob, steady **21.9 °C**, `temp_src=knob_sim`, `"bl":2` |
+| MQTT | `connected rc=0`, ~5 msgs / 10 s |
+| `lights` | KL120 `192.168.86.49`, on, **1.7 W metered** |
+| `ac` | HS110 `192.168.86.20`, on, 0.0 W metered |
+| Hub / broker | up on `192.168.86.34`, dashboard `/`, simulator `/simulator` |
+| Repo | clean, in sync, `42b290a` |
+
+Cosmetic leftover: `living/dryer` sits in the load map at off/0 W from a
+mixed-provenance test. Harmless; clear it by restarting the hub.
+
+## 18.6 Still open
+
+- **`demo.mp4`** — not recorded. Slide 13 references it; renders a placeholder
+  without it.
+- **Venue credential redaction** — `04_ORGANIZER_REQUIREMENTS.md` §E.
+- **Yash / Ajay workstreams** — assignments in the team table are guesses.
+- **Feedback forms** — every member, gates prize eligibility.
+- **Third smart plug** (`TP-LINK_Smart Plug_5307`, EP40, `192.168.86.30`) was
+  being paired; not yet bound to a load.
+- **Stale-data indicator** — the dashboard showed 86-minute-old readings as if
+  live during this session. Proposed but NOT built: grey out anything older than
+  ~15 s. Worth doing before the demo.
