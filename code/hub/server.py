@@ -631,7 +631,19 @@ def _load_from_rule(rec) -> str:
         "phantom_standby": "standby",
         "peak_hour_heavy_load": "dryer",
     }
-    return by_rule.get(rec.rule_name, "lights")
+    mapped = by_rule.get(rec.rule_name)
+    if mapped:
+        return mapped
+    # Unknown rule_name. The old default was "lights", which was silently WRONG
+    # for any detector not in the table above: a learned finding on the A/C
+    # resolved to living/lights, so approving it would switch the wrong device
+    # AND skip the comfort guardrail, which keys off the load name. The Finding
+    # has always known its own load; prefer that over guessing from the rule.
+    # Behaviour for the six mapped rules is unchanged.
+    lk = getattr(rec, "load_key", "") or ""
+    if lk:
+        return lk.split("/")[-1]
+    return "lights"
 
 
 def _guardrail_allows(snap: Dict, rec, load_key: str, action: str, now_dt):

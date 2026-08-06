@@ -82,6 +82,19 @@ class Recommendation:
     evidence: List[str] = field(default_factory=list)
     source: str = ""
     narrated_by: str = "template"   # "llm" or "template" — logged and shown in debug
+    # Carried through from the Finding so the UI can separate a deterministic
+    # rule from a learned detection. Without this the distinction dies at the
+    # narration boundary: the Finding knows, the Recommendation does not, and
+    # every card on screen looks equally rule-derived. Preserving "every
+    # recommendation traces to a named rule" depends on being able to show which
+    # ones do not.
+    detector: str = "rule"          # "rule" (R1-R6) or "learned"
+    anomaly_score: Optional[float] = None
+    # The load this concerns, carried from the Finding. server.py historically
+    # re-derived it from rule_name via a lookup table; anything not in that table
+    # silently became "lights". A learned finding is not in that table.
+    load_key: str = ""
+
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -224,6 +237,9 @@ def _validate(parsed: dict, finding) -> Recommendation:
         formula=est.formula,
         evidence=list(finding.evidence),
         source=est.source,
+        detector=getattr(finding, "detector", "rule"),
+        anomaly_score=getattr(finding, "anomaly_score", None),
+        load_key=getattr(finding, "load_key", ""),
     )
 
 
@@ -284,6 +300,9 @@ def template_narrate(finding) -> Recommendation:
         evidence=list(finding.evidence),
         source=est.source,
         narrated_by="template",
+        detector=getattr(finding, "detector", "rule"),
+        anomaly_score=getattr(finding, "anomaly_score", None),
+        load_key=getattr(finding, "load_key", ""),
     )
 
 
