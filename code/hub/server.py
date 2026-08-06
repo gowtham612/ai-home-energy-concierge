@@ -65,6 +65,9 @@ class StateStore:
         self.realized: List[Dict] = []
         self.applied_ids: set = set()
         self.actuations: List[Dict] = []
+        # Tier-2 plan, when AI_PLAN=1. Empty dict = no plan this cycle,
+        # which the UI renders as the plain ranked list it always had.
+        self.plan: Dict = {}
         self.lock = threading.Lock()
 
     # -- actuation ---------------------------------------------------------
@@ -226,6 +229,7 @@ class StateStore:
                        "clock": now_dt.strftime("%H:%M")},
             "mqtt_connected": self.mqtt_connected,
             "recos": [r.to_dict() for r in self.latest_recos(12)],
+            "plan": self.plan,
             "applied_ids": sorted(self.applied_ids),
             "realized": self.realized_totals(),
             "actuations": self.actuations[-8:][::-1],
@@ -323,6 +327,17 @@ def evaluation_tick() -> List[Recommendation]:
     except Exception as exc:
         print(f"[eval] rules failed: {exc}")
         return []
+
+    # TIER 2: one plan-synthesis call per CHANGE of the finding set (the planner
+    # caches on frozenset of ids), not per cycle and not per finding. Strictly
+    # cheaper than the per-finding narration below, which is left completely
+    # intact underneath as the fallback.
+    if os.environ.get("AI_PLAN", "0") == "1":
+        try:
+            import planner
+            STORE.plan = planner.PLANNER.plan(findings).to_dict()
+        except Exception as exc:
+            print(f"[eval] planner unavailable: {exc}")
 
     fresh: List[Recommendation] = []
     now = time.time()
