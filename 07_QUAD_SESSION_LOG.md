@@ -786,3 +786,106 @@ Everything except physical actuation:
   `home/command/...` and returns HTTP 200, but nothing is listening, so no
   actuator confirmation ever comes back and no lamp moves. Watch for the missing
   `home/actuator/...` record rather than trusting the 200.
+
+---
+
+# §16 Approve returned HTTP 400 — root cause and three fixes (2026-08-05)
+
+Reported: *"it gives the popup right. but if I approve, nothing happens, AC didnt
+turn off. for lights, it was showing 0W in dashboard but simulator was showing it
+as ON."* Wire log showed `APPLY r2-living-ac -> HTTP 400`, five times.
+
+## 16.1 The bug
+
+`code/simulator/index.html` rendered one Approve button per entry in `r.actions`
+and sent that entry as the `action` field of `POST /api/apply`:
+
+```js
+var actions = (r.actions && r.actions.length ? r.actions : ["off"]);
+... data-action="'+esc(a)+'">Approve: switch '+esc(a)+'
+post("/api/apply", { reco_id:recoId, action:action, ... })
+```
+
+But `r.actions` is **human-readable advice** — `"Turn off the ac"`, `"Set an away
+temperature"`, `"Link HVAC to geofence"` — and `hub/server.py` accepts only:
+
+```python
+action = body.get("action", "off")
+if action not in ("on", "off"):
+    return JSONResponse({"error": "action must be 'on' or 'off'"}, status_code=400)
+```
+
+So every approval was rejected. Two aggravating details:
+
+- `/api/apply` derives the target from the **rule** (`load_key = f"{rec.room}/{_load_from_rule(rec)}"`),
+  never from `action` — so all three advice strings mapped to the *same single
+  operation*. Rendering three buttons was meaningless.
+- "Approve: switch Link HVAC to geofence" advertised an action the system cannot
+  perform. Worse than a failure: a false capability claim in front of judges.
+
+**Fix:** advice renders as text; one `Approve — switch off` button per card
+carrying the real API verb. Proven against the live hub:
+
+```
+OLD  action='Turn off the ac'  -> HTTP 400
+NEW  action='off'              -> HTTP 200
+```
+
+## 16.2 Failed actuations were still booked as savings
+
+`api_apply` books the saving the instant the command is published. Nothing ever
+revised it when the confirmation came back `ok=false`, so an unreachable lamp
+still showed **"you saved $0.0023"**. `server.py`'s own docstring says
+*"USER APPROVES -> physically act -> confirm -> book the saving as realized"* —
+the code did not implement its fourth step.
+
+`StateStore.record_actuation()` now un-books on `ok=false` from a real device and
+re-arms the recommendation (the problem is unsolved, so it should be re-raised).
+`source="simulated"` is a *declared, labelled* path and stays booked. Verified:
+`realized $0.00232 -> $0` on a `kasa_error` confirmation.
+
+## 16.3 Duplicate recommendation cards
+
+`RECO_COOLDOWN_S` throttles re-*narration*, but once it lapsed the same finding id
+was appended to `STORE.recos` again, and `recos[-12:]` rendered each copy as its
+own card — `r3-living-daylight` appeared three times. New `StateStore.latest_recos()`
+keeps the append-only history for the audit trail but surfaces each id once, newest
+wording first. Used by both `/api/state` and `/api/recos`.
+
+## 16.4 Simulator fighting the real device
+
+The simulator POSTed simulated state for loads backed by a Kasa device; the
+publisher re-published true state 5 s later. That is the exact "simulator says ON,
+dashboard says 0 W" divergence. Metered loads are now labelled **real device** and
+left to the hardware. Also: the read-back line read `l.source || l.src` — keys the
+hub never sends. It sends **`metered`** (bool).
+
+Commit `a7b5efd`, pushed. A teammate had meanwhile switched the licence to MIT
+(`0180160`); rebased cleanly, no overlap.
+
+## 16.5 ⚠ Network state at time of writing — the Kasa half is DOWN
+
+Not a code fault. Discovered while verifying:
+
+| Thing | State |
+|---|---|
+| **ArtiFi** (phone hotspot) | **not broadcasting** — absent from a board-side rescan |
+| Bulb *Bedroom light 2* (`172.20.10.7`) | off-network, was on ArtiFi |
+| Heater plug (`172.20.10.5`) | **broadcasting `TP-LINK_Smart Plug_26B1` at 100%** — it has fallen back to its own setup AP, i.e. **unprovisioned** |
+| Board `wlan0` | `NO-CARRIER`, `state DOWN`, no IPv4 |
+| Board MQTT | **fine** — rides USB via `adb reverse tcp:1883` |
+| Knob telemetry | **fine** — 21.9 °C, `temp_src=knob_sim`, 1 Hz |
+| PC | HaQathon |
+
+Board-side saved Wi-Fi profiles: `ArtiFi`, `Nanda's S26`, `QGuest`.
+Visible and known-good: `Hydra`, `Qguest`, `HaQathon`.
+
+**To restore the physical-actuation demo**, all three must land on one LAN:
+1. Bring up a network the Kasa devices are on (simplest: re-enable the ArtiFi
+   hotspot — bulb and board both have saved credentials for it).
+2. The heater plug needs **re-provisioning** through the Kasa app — it is in
+   setup mode, it will not rejoin on its own.
+3. Then `python code/tools/reconfigure_network.py` to rediscover IPs and redeploy.
+
+Until then the loop still closes end-to-end and degrades **honestly**:
+`source=kasa_error, ok=false`, and — as of §16.2 — no saving is claimed.
