@@ -20,13 +20,15 @@
 
   "seasons": {
     "summer": {
-      "months": [6, 7, 8, 9],
+      "_comment": "June 1 - October 31. October is SUMMER, which is easy to get wrong.",
+      "months": [6, 7, 8, 9, 10],
       "on_peak": 0.69654,
       "off_peak": 0.47560,
       "super_off_peak": 0.38818
     },
     "winter": {
-      "months": [10, 11, 12, 1, 2, 3, 4, 5],
+      "_comment": "November 1 - May 31.",
+      "months": [11, 12, 1, 2, 3, 4, 5],
       "on_peak": 0.62200,
       "off_peak": 0.54019,
       "super_off_peak": 0.44933
@@ -66,10 +68,16 @@
   "not_confirmed_from_primary_source": {
     "season_month_boundaries": [
       "The rate table is split into Summer and Winter blocks but does not print",
-      "the date ranges. June-September summer is taken from secondary sources and",
-      "is the one value here NOT read off an SDG&E document. It changes only WHICH",
-      "column applies, never a rate. Correct SEASONS in energy_model.py if a",
-      "primary source says otherwise."
+      "the date ranges, so the boundaries here come from secondary sources —",
+      "consistently reported as summer June 1 - October 31, winter November 1 -",
+      "May 31. This is the one value in this file not read off an SDG&E rate",
+      "document. It changes only WHICH column applies, never a rate.",
+      "",
+      "An earlier revision had summer as June-September, which billed all of",
+      "OCTOBER at winter rates: $0.62200 instead of $0.69654 on-peak, a 12%",
+      "understatement for a whole month. October being summer is the easy thing",
+      "to get wrong here, and it is worth re-checking against a bill before",
+      "quoting October figures."
     ]
   }
 }
