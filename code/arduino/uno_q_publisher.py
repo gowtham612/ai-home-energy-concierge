@@ -92,7 +92,21 @@ KASA_DEFAULT_ALIASES = {
 }
 KASA_DISCOVER_S = float(os.environ.get("KASA_DISCOVER_S", "8"))
 KASA_SETTLE_S = float(os.environ.get("KASA_SETTLE_S", "0.4"))
-KASA_POLL_S = float(os.environ.get("KASA_POLL_S", "5"))   # metered-watts cadence
+# Metered-watts cadence — how often we ask a bound device what it is drawing.
+#
+# 30 s, not 5. Every poll opens a connection to the device, and a KL120 bulb
+# VISIBLY DIPS when it services one: at 5 s the bulb flickers about twelve
+# times a minute, which is glaring on camera and was reported as "my light
+# keeps flickering" after a demo run. Confirmed by stopping the publisher —
+# the flicker stopped with it.
+#
+# Costs nothing that matters: this poll only detects OUT-OF-BAND changes
+# (someone using the Kasa app or a wall switch). Every switch WE make —
+# Actuator.execute and ButtonWatch._act — reads the device back and
+# publishes immediately, so the dashboard still updates the instant the
+# demo does anything. Lower it only if you need fast detection of changes
+# made outside this system.
+KASA_POLL_S = float(os.environ.get("KASA_POLL_S", "30"))
 # TP-Link firmware serves ONE connection at a time, so a concurrent reader (the
 # Kasa phone app, another script) can make a write raise even though it landed.
 # Retry, and judge success by reading the device back — see KasaBank.switch().
