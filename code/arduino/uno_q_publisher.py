@@ -25,6 +25,7 @@ import asyncio
 import signal
 import socket
 import statistics
+import subprocess
 import sys
 import threading
 import time
@@ -185,7 +186,49 @@ def mcu_tcp_available(host: str = MCU_TCP_HOST, port: int = MCU_TCP_PORT,
 # How long to keep looking for the MCU before giving up and inventing data.
 MCU_WAIT_S = float(os.environ.get("MCU_WAIT_S", "30"))
 
-# --- TIER 1: edge anomaly scoring, on the board's own CPU -------------------
+# --- Readiness indicator pushed to the MCU's button LEDs --------------------
+# The MCU cannot see the network, so it is told. Sent on a TIMER rather than
+# only on change: the absence of these messages is the signal that this process
+# has died, which is precisely the failure that used to be invisible from the
+# board (right Wi-Fi config, publisher not running, board looked fine).
+NET_STATUS_S = float(os.environ.get("NET_STATUS_S", "8"))
+
+# SSID -> the number of blinks. Anything unlisted blinks 3 times ("some other
+# network"), which is still useful: it says associated-but-not-where-you-think.
+NET_SSID_CODES = {"artifi": 1, "haqathon": 2}
+
+
+def current_ssid() -> str:
+    """The SSID wlan0 is actually associated with, or "" if none."""
+    try:
+        out = subprocess.run(
+            ["nmcli", "-t", "-f", "DEVICE,STATE,CONNECTION", "device"],
+            capture_output=True, text=True, timeout=6).stdout
+        for line in out.splitlines():
+            parts = line.split(":")
+            if len(parts) >= 3 and parts[0] == "wlan0":
+                return parts[2] if parts[1] == "connected" else ""
+    except Exception:
+        pass
+    return ""
+
+
+def net_status_code(ssid: str) -> int:
+    if not ssid:
+        return 0
+    return NET_SSID_CODES.get(ssid.strip().lower(), 3)
+
+
+def push_net_status(pub, bank) -> None:
+    """Tell the MCU where we are and whether we are actually usable."""
+    ssid = current_ssid()
+    code = net_status_code(ssid)
+    try:
+        mqtt_ok = 1 if pub.c.is_connected() else 0
+    except Exception:
+        mqtt_ok = 0
+    kasa_ok = 1 if (bank is not None and bank.devices) else 0
+    mcu_send(f"NET {code} {mqtt_ok} {kasa_ok}\n")
 # The QRB2210 is a quad Cortex-A53 with no NPU/DSP stack, so an LLM here is
 # physically wrong. A trained logistic regression is not: pure Python, stdlib
 # only, microseconds per sample. Flagged off by default.
@@ -990,6 +1033,7 @@ def main():
     # Most recent Kasa read-back, so the edge scorer can see what is actually
     # drawing power. Sensors alone cannot tell an anomaly from a quiet evening.
     last_kasa_info: Dict[str, Dict] = {}
+    last_net_push = 0.0
 
     try:
         for line in source:
@@ -1014,6 +1058,15 @@ def main():
                 actuator.last_ack = raw
                 print(f"[uno_q] MCU ack: {raw}", flush=True)
                 continue
+
+            # Readiness heartbeat to the MCU's LEDs. On a timer because the
+            # ABSENCE of it is what tells the board this process has died.
+            if (now_wall := time.time()) - last_net_push >= NET_STATUS_S:
+                last_net_push = now_wall
+                try:
+                    push_net_status(pub, bank)
+                except Exception as exc:
+                    print(f'[net-led] push failed: {exc}', flush=True)
 
             # --- Modulino button presses (hardware debug path) ---
             # Deliberately BEFORE the MCU_SIGNALS gate below: that gate governs

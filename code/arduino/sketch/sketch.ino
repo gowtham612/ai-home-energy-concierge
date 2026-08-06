@@ -80,6 +80,27 @@
  * switches the real device -> CMD comes back -> LED. */
 #define BUTTON_ACTUATION 1
 
+/* Readiness indicator on the Buttons LEDs.
+ *
+ * The MCU cannot see the network — Wi-Fi lives on the Linux side — so the
+ * publisher tells it, via `NET <ssid> <mqtt> <kasa>` on the same return channel
+ * that carries CMD.
+ *
+ * Encodes READINESS, not just SSID, because SSID alone would not have caught
+ * the failure that motivated this: after a power cycle the board had the right
+ * Wi-Fi configuration and was still completely dead — wlan0 never associated,
+ * the publisher was not running, and the pinned Kasa addresses had gone stale
+ * with a subnet change. Four independent faults, none visible from the board.
+ *
+ *   dark            publisher not running — nothing is driving anything
+ *   1 blink         on ArtiFi
+ *   2 blinks        on HaQathon
+ *   3 blinks        on some other network
+ *   rapid flutter   associated with nothing
+ *   LED2 solid      degraded: MQTT down or no Kasa device bound
+ */
+#define NET_STATUS_LED 1
+
 #include <Arduino_Modulino.h>
 
 /* ------------------------------------------------------------------ *
@@ -171,6 +192,28 @@ uint16_t btnLights = 0, btnAc = 0;
 /* millis() of a press still awaiting its CMD confirmation; 0 = nothing pending. */
 unsigned long pendLights = 0, pendAc = 0;
 bool lastActionFailed = false;
+
+#if NET_STATUS_LED
+/* Readiness state, pushed from Linux. See the NET_STATUS_LED note above. */
+uint8_t  netCode      = 0;      /* 0 none · 1 ArtiFi · 2 HaQathon · 3 other   */
+bool     netDegraded  = false;  /* MQTT down or no Kasa device bound          */
+unsigned long lastNetMsg = 0;   /* 0 = never heard from the publisher         */
+
+/* Blink sequence state. A state machine, not delay() — the 20 ms button poll
+   and the 1 Hz telemetry both have to keep running while this animates. */
+unsigned long netSeqStart = 0;  /* when the current REST period began         */
+int      netStep     = -1;      /* -1 = resting, else index into the sequence */
+unsigned long netStepAt = 0;
+
+const unsigned long NET_PERIOD_MS   = 10000;  /* show it this often          */
+const unsigned long NET_ON_MS       = 170;
+const unsigned long NET_OFF_MS      = 230;
+const unsigned long NET_FLUTTER_MS  = 90;     /* "no network" is visibly fast */
+const int           NET_FLUTTER_N   = 6;
+/* If the publisher stops, its NET messages stop. Going dark after this is the
+   signal — it is exactly the case that looked identical to "working" before. */
+const unsigned long NET_STALE_MS    = 40000;
+#endif
 
 /* How long to wait for the Linux side to confirm before calling it a failure.
  *
@@ -421,7 +464,9 @@ void pollButtons(unsigned long now) {
     pending[i] = now3[i];
   }
 
-#if BUTTON_ACTUATION
+#if NET_STATUS_LED
+  updateLeds(now);
+#elif BUTTON_ACTUATION
   /* Confirmed device state, not requested state — see handleCommand(). */
   buttons.setLeds(lightsOn, acOn, lastActionFailed);
 #else
@@ -429,6 +474,64 @@ void pollButtons(unsigned long now) {
 #endif
 #endif
 }
+
+
+#if NET_STATUS_LED
+/* Single owner of the three LEDs.
+ *
+ * Two things want them: the load mirror (which bulb/plug is confirmed on) and
+ * the readiness blink. Rather than have both call setLeds() and fight — which
+ * would show whichever ran last, at 50 Hz — everything routes through here.
+ *
+ * Resting state is the load mirror, so the button feedback that already works
+ * is unchanged between blinks. The sequence borrows the LEDs briefly, then
+ * hands them straight back.
+ */
+void updateLeds(unsigned long now) {
+#if USE_BUTTONS
+  if (!haveButtons) return;
+
+  /* No word from the publisher for NET_STALE_MS: it is not running, or it can
+     no longer reach us. Go dark and stay dark — a board that looks unpowered is
+     the correct signal here, and it is the case that used to be invisible. */
+  bool stale = (lastNetMsg == 0) || ((now - lastNetMsg) > NET_STALE_MS);
+  if (stale) {
+    buttons.setLeds(false, false, false);
+    netStep = -1;
+    return;
+  }
+
+  int blinks    = (netCode == 0) ? NET_FLUTTER_N : netCode;
+  unsigned long onMs  = (netCode == 0) ? NET_FLUTTER_MS : NET_ON_MS;
+  unsigned long offMs = (netCode == 0) ? NET_FLUTTER_MS : NET_OFF_MS;
+
+  if (netStep < 0) {
+    /* Resting: show the load mirror, plus the degraded flag on LED2 so a
+       half-working board is distinguishable from a healthy one at a glance. */
+    buttons.setLeds(lightsOn, acOn, lastActionFailed || netDegraded);
+    if ((now - netSeqStart) >= NET_PERIOD_MS) {
+      netStep = 0;
+      netStepAt = now;
+    }
+    return;
+  }
+
+  /* Animating: even steps lit, odd steps dark. */
+  bool lit = ((netStep % 2) == 0);
+  unsigned long dwell = lit ? onMs : offMs;
+  buttons.setLeds(lit, lit, lit);
+
+  if ((now - netStepAt) >= dwell) {
+    netStep++;
+    netStepAt = now;
+    if (netStep >= blinks * 2) {      /* sequence finished — hand the LEDs back */
+      netStep = -1;
+      netSeqStart = now;
+    }
+  }
+#endif
+}
+#endif
 
 void pollKnobButton() {
 #if USE_KNOB
@@ -500,6 +603,29 @@ void handleCommand(char *line) {
       lastActionFailed = false; chirp(660);
       Serial.println(F("{\"ack\":\"simbtn\",\"button\":\"b\",\"load\":\"ac\"}"));
     }
+    return;
+  }
+#endif
+
+#if NET_STATUS_LED
+  /* `NET <ssid> <mqtt> <kasa>` — readiness push from the Linux side.
+   *
+   * Arrives on a timer, not only on change: the ABSENCE of it is meaningful.
+   * lastNetMsg is what tells updateLeds() the publisher is still alive, so a
+   * process that dies takes the LEDs dark with it rather than freezing them on
+   * a stale-but-plausible pattern. */
+  if (strcmp(verb, "NET") == 0) {
+    char *ssid = strtok(NULL, " \t");
+    char *mq   = strtok(NULL, " \t");
+    char *ks   = strtok(NULL, " \t");
+    if (ssid == NULL) return;
+    int code = atoi(ssid);
+    netCode = (code < 0 || code > 3) ? 3 : (uint8_t)code;
+    bool mqttOk = (mq == NULL) || (atoi(mq) != 0);
+    bool kasaOk = (ks == NULL) || (atoi(ks) != 0);
+    netDegraded = !(mqttOk && kasaOk);
+    lastNetMsg = millis();
+    if (lastNetMsg == 0) lastNetMsg = 1;   /* 0 means "never heard" */
     return;
   }
 #endif
@@ -648,6 +774,16 @@ void loop() {
      line it saw, so a dropped line loses nothing and a duplicate does nothing. */
   Serial.print(F(",\"bl\":"));           Serial.print(btnLights);
   Serial.print(F(",\"ba\":"));           Serial.print(btnAc);
+#endif
+#if NET_STATUS_LED
+  /* Echo back what the readiness LEDs are currently showing. The LEDs are the
+     point, but nothing off-board can SEE them — without this the feature is
+     unverifiable except by eye, and every other claim in this project is
+     checkable. Now a test can assert the MCU received and parsed the push. */
+  Serial.print(F(",\"net\":"));          Serial.print(netCode);
+  Serial.print(F(",\"net_deg\":"));      Serial.print(netDegraded ? 1 : 0);
+  Serial.print(F(",\"net_age_ms\":"));
+  Serial.print(lastNetMsg == 0 ? -1L : (long)(millis() - lastNetMsg));
 #endif
   Serial.print(F(",\"nodes\":"));        printNodes();
   Serial.println(F("}"));
