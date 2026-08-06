@@ -580,7 +580,16 @@ async def api_apply(body: Dict):
     if rec is None:
         return JSONResponse({"error": f"unknown reco_id {reco_id!r}"}, status_code=404)
 
-    load_key = f"{rec.room}/{_load_from_rule(rec)}"
+    load_name = _load_from_rule(rec)
+    if not load_name:
+        # Cannot determine which device this concerns. Refuse rather than act on
+        # a guess — see the note in _load_from_rule().
+        return JSONResponse(
+            {"error": "cannot determine which load this recommendation concerns",
+             "reco_id": reco_id, "rule_name": rec.rule_name,
+             "hint": "the Finding must carry load_key, or rule_name must be mapped"},
+            status_code=422)
+    load_key = f"{rec.room}/{load_name}"
     action = body.get("action", "off")
     if action not in ("on", "off"):
         return JSONResponse({"error": "action must be 'on' or 'off'"}, status_code=400)
@@ -643,7 +652,22 @@ def _load_from_rule(rec) -> str:
     lk = getattr(rec, "load_key", "") or ""
     if lk:
         return lk.split("/")[-1]
-    return "lights"
+
+    # Nothing left to go on. Return "" and let the caller REFUSE, rather than
+    # guessing a device.
+    #
+    # This used to `return "lights"`. That line is what made the learned-A/C
+    # incident possible, and deleting only the specific trigger would have left
+    # the mechanism in place for whatever touches Recommendation construction
+    # next — Recommendation.load_key defaults to "", so a new construction site,
+    # a deserialised object, or a third-party rule inherits the silent guess.
+    # An actuator that picks a plausible-looking device when it does not know
+    # which device is meant is the single most dangerous shape of code in this
+    # project. Fail loudly instead; a 422 is recoverable, switching the wrong
+    # appliance in someone's home is not.
+    print(f"[apply] REFUSING: cannot determine the load for reco {rec.id!r} "
+          f"(rule_name={rec.rule_name!r}, load_key empty)")
+    return ""
 
 
 def _guardrail_allows(snap: Dict, rec, load_key: str, action: str, now_dt):
