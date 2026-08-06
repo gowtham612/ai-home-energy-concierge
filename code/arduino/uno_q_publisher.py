@@ -168,6 +168,39 @@ def mcu_tcp_available(host: str = MCU_TCP_HOST, port: int = MCU_TCP_PORT,
         return False
 
 
+# How long to keep looking for the MCU before giving up and inventing data.
+MCU_WAIT_S = float(os.environ.get("MCU_WAIT_S", "30"))
+
+
+def wait_for_mcu(timeout_s: float = MCU_WAIT_S) -> bool:
+    """Poll for the router socket instead of deciding on a single attempt.
+
+    `arduino-router` restarts whenever the sketch is re-flashed, and takes
+    several seconds to come back after the board is re-plugged over USB. A lone
+    probe that lost that race used to commit this process to SYNTHETIC data for
+    its entire lifetime — the publisher kept running, the dashboard kept
+    updating once a second, and nothing downstream said the numbers were
+    invented. Observed live: a redeploy right after a re-plug produced a
+    plausible drifting `temp_c` while the real knob sat still at 21.9 °C.
+
+    Retrying costs a few seconds on a genuinely MCU-less run and removes a
+    failure mode that is nearly impossible to spot from the dashboard.
+    """
+    if mcu_tcp_available():
+        return True
+    print(f"[uno_q] MCU router socket not up yet — polling "
+          f"tcp://{MCU_TCP_HOST}:{MCU_TCP_PORT} for {timeout_s:.0f}s "
+          f"(it restarts with the sketch and after a re-plug)", flush=True)
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        time.sleep(1.0)
+        if mcu_tcp_available():
+            waited = timeout_s - max(0.0, deadline - time.time())
+            print(f"[uno_q] MCU appeared after {waited:.0f}s", flush=True)
+            return True
+    return False
+
+
 # The live monitor socket, so the return direction (Linux -> MCU) can reuse the
 # connection tcp_lines() already holds open. The router bridges that socket to
 # the MCU's Serial in BOTH directions; whether host->MCU bytes are actually
@@ -770,7 +803,16 @@ class Actuator:
 
 
 def fake_lines():
-    """Generate MCU-shaped lines so this can be built before hardware works."""
+    """Generate MCU-shaped lines so this can be built before hardware works.
+
+    Every line DECLARES itself synthetic. This used to emit bare values with no
+    provenance keys at all, which was worse than it sounds: the hub merges room
+    state with {**prev, **payload}, so a `temp_src: "knob_sim"` left over from an
+    earlier real run SURVIVED while these invented values overwrote temp_c. The
+    dashboard then showed a made-up temperature attributed to the physical knob
+    — the exact confusion the provenance keys were added to prevent. A generated
+    value must never be able to inherit a measured value's label.
+    """
     occ, lux, t, h = True, 200, 23.0, 45.0
     while RUNNING:
         if random.random() < 0.15:
@@ -779,7 +821,10 @@ def fake_lines():
         t = max(18.0, min(30.0, t + random.uniform(-0.25, 0.25)))
         h = max(30.0, min(70.0, h + random.uniform(-1.0, 1.0)))
         yield json.dumps({"occupancy": occ, "lux": lux, "temp_c": round(t, 1),
-                          "humidity": round(h, 1), "raw_pir": 1 if occ else 0})
+                          "humidity": round(h, 1), "raw_pir": 1 if occ else 0,
+                          "temp_src": "synthetic", "hum_src": "synthetic",
+                          "lux_src": "synthetic", "occ_src": "synthetic",
+                          "nodes": "none"})
         time.sleep(1)
 
 
@@ -837,14 +882,22 @@ def main():
     handle = None
     if args.fake_serial:
         source = fake_lines()
-    elif mcu_tcp_available():
+    elif wait_for_mcu():
         source = tcp_lines()
     else:
         port = find_port()
         if port is None:
-            print("[uno_q] no MCU found (no router socket on "
-                  f"tcp://{MCU_TCP_HOST}:{MCU_TCP_PORT}, no /dev/ttyACM*) — "
-                  "falling back to fake data", flush=True)
+            # Loud on purpose. Silently substituting invented readings for a
+            # sensor the operator believes is live is the worst failure this
+            # program has; it stays available as a fallback, but never quietly.
+            print("[uno_q] " + "=" * 62, flush=True)
+            print("[uno_q] NO MCU FOUND — PUBLISHING SYNTHETIC DATA", flush=True)
+            print(f"[uno_q]   no router socket on tcp://{MCU_TCP_HOST}:{MCU_TCP_PORT}"
+                  f" after {MCU_WAIT_S:.0f}s, and no /dev/ttyACM*", flush=True)
+            print("[uno_q]   every sensor value below is INVENTED; the knob is "
+                  "not being read", flush=True)
+            print("[uno_q]   marked on the wire as *_src=\"synthetic\"", flush=True)
+            print("[uno_q] " + "=" * 62, flush=True)
             source = fake_lines()
         else:
             handle = serial.Serial(port, BAUD, timeout=2)

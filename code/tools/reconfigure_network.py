@@ -229,7 +229,15 @@ def main() -> int:
         print("\n(dry run — nothing written)")
         return 0
 
-    BOARD_ENV.write_text(text, encoding="utf-8")
+    # newline="\n" is load-bearing, not style. This runs on Windows, where the
+    # default text mode turns every "\n" into "\r\n" — and board.env is sourced
+    # by bash ON THE BOARD, which keeps the CR as part of the VALUE. That gives
+    # MCU_TCP_HOST="127.0.0.1\r" and MQTT_HOST="192.168.86.34\r": both connects
+    # fail, so the publisher silently falls back to synthetic sensor data AND
+    # never reaches the broker. It looks like a dead board, not a corrupt file.
+    # This exact bug has now bitten the project twice; hence the explicit
+    # newline plus the CR strip on deploy.
+    BOARD_ENV.write_text(text, encoding="utf-8", newline="\n")
     print(f"\n5. Wrote {BOARD_ENV}")
 
     if args.skip_board:
@@ -247,6 +255,12 @@ def main() -> int:
 
     print("6. Deploying to the board...")
     adb("push", str(BOARD_ENV), f"{BOARD_DEST}/board.env")
+    # Strip CR on the board as well. The write above is the real fix, but this
+    # also protects against a board.env edited by hand on Windows, or pushed by
+    # some other route. A stray CR here does not fail loudly — it produces a
+    # running publisher quietly serving invented data, so it is worth being
+    # defensive twice.
+    adb("shell", f"sed -i 's/\\r$//' {BOARD_DEST}/board.env")
     adb("shell", "for p in $(pgrep -f uno_q_publisher.py); do kill -9 $p; done")
     # Launch WITHOUT waiting. `adb shell "cmd &"` does not return: adb keeps the
     # connection open as long as anything holds the stream, even with nohup and
