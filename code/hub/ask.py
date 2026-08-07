@@ -121,17 +121,47 @@ def _digest_lines(state: Dict) -> Tuple[str, Dict[str, str]]:
                   "baseline_only_kwh", "baseline_only_usd"):
             if hd.get(k) is not None:
                 allowed[f"history.{k}"] = f"{hd[k]}"
+        d = hd["window_days"]
+        # Every history figure carries its window INLINE. Probed live, "what did
+        # my HVAC cost historically?" returned "$14.84 per day" — the 37-day
+        # on-peak subtotal with an invented daily rate. A number whose timeframe
+        # is only stated once, in a header, gets re-timeframed by the model.
+        #
+        # "hvac" is aliased to the words people actually use. Asked "how much did
+        # my AIR CONDITIONER use over the past month?", the model returned the
+        # 0.55 kWh LIVE finding and captioned it "as reported in the HISTORY
+        # section" — 285x wrong — because the only tokens matching "air
+        # conditioner" were in the live A/C finding. Asking the same thing as
+        # "heating and cooling over the last 37 days" answered correctly.
         lines.append(
-            f"HISTORY (last {hd['window_days']} days, NOT live -- a separate window "
-            f"from DRAWING NOW above): total {hd['total_kwh']} kWh (${hd['total_usd']}). "
-            f"hvac (inferred) {hd['hvac_kwh']} kWh (${hd['hvac_usd']}), "
-            f"~{hd['hvac_hours_per_day']} h/day, {hd['hvac_on_peak_pct_of_hvac']}% of it "
-            f"on-peak (${hd['hvac_on_peak_usd']}); shifting that on-peak slice to "
+            f"HISTORY (a {d}-day past window, NOT live -- every number in this "
+            f"line covers {d} days, never a day and never right now): "
+            f"total {hd['total_kwh']} kWh over {d} days (${hd['total_usd']} over {d} days). "
+            f"hvac -- this is the AIR CONDITIONER / AC / A/C / heating and cooling "
+            f"bucket (inferred) -- {hd['hvac_kwh']} kWh over {d} days "
+            f"(${hd['hvac_usd']} over {d} days), averaging ~{hd['hvac_hours_per_day']} h/day, "
+            f"{hd['hvac_on_peak_pct_of_hvac']}% of it on-peak "
+            f"(${hd['hvac_on_peak_usd']} over {d} days); shifting that on-peak slice to "
             f"super-off-peak would save ~${hd['hvac_onpeak_shift_monthly_usd']}/month. "
-            f"car_charging (inferred) {hd['car_charging_kwh']} kWh (${hd['car_charging_usd']}), "
-            f"{hd['car_super_off_peak_pct']}% already in the cheapest super-off-peak window. "
-            f"lights_or_fan (inferred) {hd['lights_or_fan_kwh']} kWh (${hd['lights_or_fan_usd']}). "
-            f"baseline/standby {hd['baseline_only_kwh']} kWh (${hd['baseline_only_usd']})."
+            f"car_charging (inferred) {hd['car_charging_kwh']} kWh over {d} days "
+            f"(${hd['car_charging_usd']} over {d} days). "
+            f"lights_or_fan (inferred) {hd['lights_or_fan_kwh']} kWh over {d} days "
+            f"(${hd['lights_or_fan_usd']} over {d} days). "
+            f"baseline/standby {hd['baseline_only_kwh']} kWh over {d} days "
+            f"(${hd['baseline_only_usd']} over {d} days)."
+        )
+        # car_super_off_peak_pct is DELIBERATELY not offered as a finding.
+        # car_charging is defined as >=1.1 kW between 00:00-06:00, and
+        # super-off-peak weekday is 00:00-06:00, so the figure is 100% by
+        # construction: all 99 labelled intervals sit in hours 0-5. Given it,
+        # the model reported "already in the cheapest window, no adjustment
+        # needed" as though it were an insight. It is unfalsifiable — a car
+        # charged at 3 PM would be labelled hvac and never counted here.
+        lines.append(
+            "HISTORY NOTE: do not claim the car charging is well-timed. The "
+            "car_charging label is DEFINED as overnight midnight-6AM load, which "
+            "is the same block as super-off-peak, so it is circular by "
+            "construction and says nothing about the household's behaviour."
         )
         lines.append(f"HISTORY CAVEAT: {hd['caveat']}")
 
@@ -234,11 +264,16 @@ def deterministic_answer(question: str, state: Dict) -> str:
             or "history" in q or "past month" in q):
         hd = build_history_digest()
         if hd:
+            # No car_super_off_peak_pct here either: it is 100% by construction
+            # (see the note in _digest_lines), so quoting it as "already
+            # off-peak" would be praising a labelling artifact.
             return (f"Over the last {hd['window_days']} days: an estimated "
-                    f"{hd['hvac_kwh']} kWh on HVAC (${hd['hvac_usd']}), "
+                    f"{hd['hvac_kwh']} kWh on heating/cooling — the A/C — "
+                    f"(${hd['hvac_usd']}), "
                     f"{hd['car_charging_kwh']} kWh on car charging "
-                    f"(${hd['car_charging_usd']}, {hd['car_super_off_peak_pct']}% "
-                    f"already off-peak), {hd['lights_or_fan_kwh']} kWh on lights/fan. "
+                    f"(${hd['car_charging_usd']}), "
+                    f"{hd['lights_or_fan_kwh']} kWh on lights/fan. "
+                    f"All figures cover the whole {hd['window_days']} days, not one day. "
                     f"These are inferred from whole-home data, not measured per-circuit.")
         return "No historical usage data is available right now."
 
