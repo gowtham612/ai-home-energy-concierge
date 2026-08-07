@@ -107,6 +107,10 @@ One sentence: **the board senses, the PC decides, the board acts.**
 | **Planner** | One LLM call that ranks all findings together, instead of narrating each separately. Caches on the set of finding ids, so it only calls out when that set changes. |
 | **Narration** | The per-finding LLM write-up. The fallback beneath the planner. |
 | **Provenance verifier** | Checks that every number the model emits actually appears in its source data. Catches invented figures. |
+| **History digest** | 37 days of real 15-minute utility data, rolled into per-bucket totals plus a typical-day baseline. The **past** window. |
+| **Disaggregation** | Splitting a whole-home meter into per-appliance buckets. Here it is **inferred** from the size and time of each 15-minute jump over that day's 10th-percentile baseline — never measured per-circuit. |
+| **Computed answer** | A question the hub already knows the answer to (R7's verdict, arithmetic, the anomaly score). These bypass the model entirely — it can only degrade a known-correct result. |
+| **LIVE vs HISTORY** | Two separate windows. "What am I drawing now" is LIVE; "why is my bill high" is HISTORY. Answering one with the other is the main hazard of feeding both to a model. |
 
 > **Latency tracks output length, not input.** 135 characters ≈ 2.6 s; 1060 ≈ 11.4 s.
 > Capping output length is the single most effective speed control.
@@ -155,7 +159,11 @@ One sentence: **the board senses, the PC decides, the board acts.**
 | `code/hub/llm.py` | GenieX client |
 | `code/hub/planner.py` | Tier-2 plan synthesis |
 | `code/hub/anomaly.py` | Edge logistic regression |
-| `code/hub/ask.py` | `/ask` Q&A |
+| `code/hub/ask.py` | `/ask` Q&A + deterministic answerer |
+| `code/hub/history_digest.py` | 37-day usage rollup |
+| `code/hub/provenance.py` | number-in-source verifier |
+| `code/tools/history_disaggregate.py` | builds the labelled CSV from raw utility data |
+| `code/tools/ask_score.py` | scored regression probe for `/ask` |
 | `code/simulator/index.html` | Sensor + control page |
 | `code/phone/index.html` | Approval feed |
 | `code/tools/run_demo.ps1` | Tiled demo launcher |

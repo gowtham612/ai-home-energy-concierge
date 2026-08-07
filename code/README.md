@@ -202,6 +202,53 @@ with "we told it not to." This answers with a mechanism and a violation count.
 
 Cost: **110 us** per response.
 
+**What the badge does and does not mean.** It confirms a number *exists in the
+source*. It cannot tell that a real number answers a different question than the
+one asked. Probed against 37 days of real usage, the model reported the live
+0.55 kWh figure when asked what the air conditioner used *over the past month* -
+a 285x error - and labelled it "as reported in the HISTORY section". Provenance
+read **verified**, correctly, because 0.55 was genuinely in the digest. Treat the
+badge as "not invented", never as "right".
+
+### Two windows: what is happening now, and what the bill covers
+
+The hub answers over two separate windows, and keeping them apart is the main
+hazard of feeding both to one model:
+
+| Window | Source | Answers |
+|---|---|---|
+| **LIVE** | Kasa meters + Modulino, right now | "What am I drawing?" "Is anything unusual?" |
+| **HISTORY** | 37 days of real 15-minute utility data | "Why is my bill high?" "How does today compare?" |
+
+`hub/history_digest.py` rolls the period into per-bucket kWh and dollars plus a
+typical-day baseline. The per-appliance split is **inferred**, not measured:
+`tools/history_disaggregate.py` labels each 15-minute interval from the size of
+its jump over that day's 10th-percentile baseline, on a whole-home meter with no
+per-circuit data. Every figure is stated as inferred wherever it is cited.
+
+One metric was deliberately **removed** rather than shown. Car charging is
+*defined* as a large overnight load between midnight and 6 AM, which is the same
+block as the super-off-peak rate - so "100% of charging is in the cheapest
+window" is true by construction and says nothing about the household. Given the
+figure, the model duly reported it as a finding. A meaningless number is deleted,
+not shipped with a caveat.
+
+### Questions the model never sees
+
+Some answers the hub has already computed: R7's verdict is the output of a rule
+that just ran, the combined cost of the findings is addition, and the anomaly
+score came from the edge detector. Sending those to a model can only degrade a
+known-correct result, and measurably did - it invented a temperature above 27 C
+to justify a refusal that never happened, and answered "No, nothing unusual is
+happening" in the same breath as describing an anomaly scoring 0.81.
+
+Those intents are answered deterministically and marked `answered_by: computed`.
+Everything genuinely interpretive - why the bill is high, what to do first,
+what-if questions - still goes to the model.
+
+`tools/ask_score.py` is the regression probe: it asks the questions the demo
+actually asks, then an adversarial set, three runs each, and scores them.
+
 ## Measured performance
 
 Technical Implementation is judged on *resource utilization, optimization, latency and

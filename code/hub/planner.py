@@ -43,6 +43,7 @@ except ImportError:
     requests = None
 
 import llm as llm_mod
+from history_digest import build_history_digest
 
 AI_PLAN = os.environ.get("AI_PLAN", "0") == "1"
 
@@ -67,6 +68,9 @@ CRITICAL RULES:
   deferring it, not stopping it.
 - If the comfort guardrail suppressed something, explain the tradeoff in one
   sentence.
+- A HISTORY line, if present, describes a past multi-day window, not right now
+  -- use it only to note whether today's findings fit or break the home's usual
+  pattern, and say "inferred" when citing its hvac/car_charging/lights figures.
 
 Reply with ONE JSON object, no markdown, no commentary:
 {"situation":"<one sentence>",
@@ -123,6 +127,14 @@ def _user_prompt(findings: List, suppressed: Optional[List] = None) -> str:
         out += ("\n\nSUPPRESSED BY THE COMFORT GUARDRAIL (do not rank these; "
                 "explain the tradeoff in `situation` if relevant):\n"
                 + "\n".join(f"  {s}" for s in suppressed))
+    hd = build_history_digest()
+    if hd:
+        out += (f"\n\nHISTORY (last {hd['window_days']} days, NOT live): "
+                f"hvac (inferred) {hd['hvac_kwh']} kWh, ~{hd['hvac_hours_per_day']} h/day, "
+                f"{hd['hvac_on_peak_pct_of_hvac']}% on-peak; "
+                f"car_charging (inferred) {hd['car_charging_kwh']} kWh, "
+                f"{hd['car_super_off_peak_pct']}% already super-off-peak; "
+                f"lights_or_fan (inferred) {hd['lights_or_fan_kwh']} kWh.")
     return out
 
 
@@ -139,6 +151,12 @@ def allowed_numbers(findings: List) -> Dict[str, str]:
             allowed[f"{f.id}.rate"] = f"{est.rate_used:.4f}"
         if getattr(f, "anomaly_score", None) is not None:
             allowed[f"{f.id}.score"] = f"{f.anomaly_score}"
+    hd = build_history_digest()
+    if hd:
+        for k in ("window_days", "hvac_kwh", "hvac_hours_per_day", "hvac_on_peak_pct_of_hvac",
+                  "car_charging_kwh", "car_super_off_peak_pct", "lights_or_fan_kwh"):
+            if hd.get(k) is not None:
+                allowed[f"history.{k}"] = f"{hd[k]}"
     return allowed
 
 

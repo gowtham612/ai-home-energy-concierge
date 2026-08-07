@@ -30,7 +30,14 @@ import re
 from typing import Dict, Iterable, List, Sequence, Tuple
 
 # Matches 1, 1.5, $1.28, 0.550, 89%, 1,234.5 — the shapes that actually appear.
-_NUMBER_RE = re.compile(r"-?\d[\d,]*(?:\.\d+)?")
+# The lookbehind stops a RANGE being read as a negative number. Without it,
+# "inside the 16.0-27.0 C band" scans as 16.0 followed by MINUS 27.0, and
+# -27.0 is in no digest, so a factually correct answer was reported as a
+# provenance failure. Seen on the guardrail answer, which is exactly the one
+# whose "verified" badge gets pointed at on camera.
+# A leading minus is still honoured where it can be a sign: "-0.109" after a
+# space or at the start of the string.
+_NUMBER_RE = re.compile(r"(?<![\d.])-?\d[\d,]*(?:\.\d+)?")
 
 # Clock hours, ranks, small counts. See module docstring for why.
 SMALL_INT_MAX = 24

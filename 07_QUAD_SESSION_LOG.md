@@ -18,7 +18,23 @@ credential is referenced by variable name and storage location only; see
 
 ## 0. Resume point — read this first
 
-> ### ⚡ LATEST STATE (2026-08-06, late) — read §21 before anything else
+> ### ⚡ LATEST STATE (2026-08-07) — read §22, then §21
+>
+> **37 days of real utility data are now on `main`** (§22) — the first time history
+> has been in the mainline. `/ask` answers over **two windows**: LIVE (right now)
+> and HISTORY (the billing period). Questions the hub has already computed — R7's
+> verdict, the combined cost, the anomaly score — **bypass the model entirely**
+> and come back `answered_by: computed`.
+>
+> **The provenance badge means "not invented", never "right".** It confirms a
+> number exists in the source; it cannot tell that a real number answers the wrong
+> question. Every defect found in §22 was marked `verified`. Do not present it on
+> camera as correctness.
+>
+> **`smoke_test.py` is unreliable while the board publisher is running** — they
+> share the broker, so real load data overwrites the test's fixtures and
+> `total_watts` fails against an expected 1340. Pause the publisher first (§22.7).
+>
 >
 > **⚠ This project is now worked on from MULTIPLE HOSTS, each running Claude.**
 > Record every change here. A force-push from the other host already destroyed
@@ -1718,21 +1734,21 @@ help if the phone is on guest Wi-Fi and the PC is on the main network.
 
 ## 21.14 GLOSSARY.md, and three docs that described things that do not exist
 
-Added **`GLOSSARY.md`** � every term the project uses, ordered by how data actually
+Added **`GLOSSARY.md`** � every term the project uses, ordered by how data actually
 flows, with the common misreadings called out. Written because the vocabulary grew
 faster than the docs and there is now more than one machine working on this.
 
 Writing it surfaced three claims about **current reality** that were false. Corrected:
 
 **1. `/phone` is not a PWA.** `code/phone/index.html` has no manifest and no service
-worker, so it does not install and does not work offline. It is a plain mobile page �
+worker, so it does not install and does not work offline. It is a plain mobile page �
 specifically the recommendation feed with Approve buttons. It is also **not** a sensor
 simulator; the sliders are on `/simulator`. The hub banner said "Phone PWA" in the one
 place a judge is most likely to look. Now "Phone", and `/simulator` is labelled
 "Sensors / Approve" rather than "Approve / HITL", which undersold what it does.
 
 **2. `code/README.md`'s architecture diagram was pre-pivot.** It still showed
-`PIR/LDR/temp` and `SERVO/RELAY` � breadboard hardware this project never had � plus a
+`PIR/LDR/temp` and `SERVO/RELAY` � breadboard hardware this project never had � plus a
 Qualcomm AI Cloud 100 box that was dropped in the architecture pivot, and "MQTT over
 Wi-Fi". Redrawn against what exists: Modulino Knob + Buttons, Kasa KL120/HS110 as the
 actuators, the edge anomaly tier, planner and provenance verifier.
@@ -1751,4 +1767,127 @@ rewriting history to match the outcome would be its own kind of dishonesty. Only
 documents that describe **what exists now** were corrected.
 
 Verified: smoke 32/32, `server.py` compiles, banner renders the corrected labels.
+
+
+---
+
+# 22. History usage data lands on main (2026-08-07)
+
+First time real utility data is on `main`. Merged from `feature/history-usage-context`
+after scored probing; `main` had none of this before.
+
+## 22.1 What arrived
+
+| File | What |
+|---|---|
+| `code/data/Electric_15_Minute_history_labeled.csv` | 37 days of real 15-minute readings, labelled |
+| `code/hub/history_digest.py` | rolls the window into per-bucket kWh/$ + a typical-day baseline |
+| `code/tools/history_disaggregate.py` | builds the labelled CSV from the raw utility export |
+| `code/tools/ask_score.py` | scored regression probe for `/ask` |
+| `code/tools/ask_probe.py` | the earlier exploratory probe |
+
+`hub/ask.py`, `hub/planner.py`, `hub/provenance.py` changed to use it.
+
+## 22.2 The data is sound; the integration was not
+
+Integrity checks that passed first time: buckets sum to exactly **558.41 kWh / $254.25**,
+matching the raw export's own `Total Usage`; **3552 intervals = 37 x 96**, no gaps, no
+double counting.
+
+Everything that was wrong lived in how the figures were *presented* to the model.
+
+**The system prompt still said "you answer questions about a home's live energy state."**
+The branch added a 37-day window and never updated the job description, so the model was
+told its subject was the present, handed the past, and expected to use it. Asked *why is
+my bill high* it answered from the current instant; asked *how does today compare to my
+usual month* it said no such data existed while holding 37 days of it. One stale sentence
+caused three of five failures.
+
+**There was no daily baseline.** A 37-day total and one day are not comparable. The model
+said so, correctly and uselessly. `avg_kwh_per_day` / `avg_usd_per_day` are now computed
+(15.09 kWh, $6.87) rather than expecting arithmetic the prompt forbids.
+
+**The bucket was named in jargon.** The digest said `hvac`; people say "air conditioner".
+Asked what the AC used over the past month the model returned the **live 0.55 kWh** and
+captioned it "as reported in the HISTORY section" - **285x** under the real 157.12 kWh.
+The same question as "heating and cooling over the last 37 days" answered correctly.
+
+**Timeframes were stated once, in a header, and got re-scoped.** *What did my HVAC cost
+historically* returned **"$14.84 per day"** - the 37-day on-peak subtotal with an invented
+daily rate. Every figure now carries its own window inline.
+
+## 22.3 A metric that was deleted rather than displayed
+
+`car_super_off_peak_pct` read 100.0%. It is 100% **by construction**: `car_charging` is
+DEFINED as >=1.1 kW between 00:00-06:00, and super-off-peak weekday is 00:00-06:00.
+Verified: all 99 labelled intervals fall in hours 0-5, all 99 super_off_peak. A car
+charged at 3 PM would be labelled `hvac` and never counted.
+
+Given the figure, the model reported *"already in the cheapest super-off-peak window,
+100.0% of the time. No adjustment needed."* - unfalsifiable, and presented as an insight.
+
+The first fix added an instruction telling the model not to say it. That is coaching, and
+it left the number in the verifier's allowed set, so the vacuous claim still passed
+provenance. The figure is now **removed**. A meaningless number is deleted, not shipped
+with a warning label.
+
+## 22.4 Computed answers no longer reach the model
+
+R7's verdict is the output of a rule that just ran. The combined cost is addition. The
+anomaly score came from the edge detector. Probed, the model got **all three** wrong while
+the provenance badge read `verified` throughout:
+
+- invented *"actively maintaining a temperature above 27.0 C"* at 23.5 C, to justify a
+  refusal that never happened
+- *"No, nothing unusual is happening right now. The A/C is cooling an empty home, which is
+  unusual... anomaly score of 0.81."* - in one answer
+
+These intents are answered deterministically and marked `answered_by: computed`.
+Interpretive questions still go to the model.
+
+**Routing is by keyword and will miss phrasings nobody thought of.** A held-out probe
+asked *"add up everything that's being wasted"*, matched no keyword, and got prose with no
+total. Widened once; the ceiling is real.
+
+## 22.5 The provenance badge means "not invented", never "right"
+
+Every failure above returned `provenance: verified`, because every number quoted was
+genuinely in the digest. The verifier confirms a figure EXISTS; it cannot tell that a real
+number answers a different question. Do not present the badge on camera as correctness.
+
+One real verifier bug was fixed on the way: `_NUMBER_RE` read `16.0-27.0` as minus 27.0,
+so a correct guardrail answer failed its own check. A negative lookbehind now keeps ranges
+from parsing as negatives while genuine negatives still work.
+
+## 22.6 Scores
+
+| Iteration | Score | Change |
+|---|---|---|
+| 1 | 7.50 | baseline after the first four fixes |
+| 2 | 8.12 | guardrail verdict when inactive; verifier range bug |
+| 3 | 9.38 | system-prompt scope; daily baseline; two bad assertions corrected |
+| 4 | 10.00 | whole-home total disambiguated |
+| 5 | 10.00 | routing widened, no regression |
+
+**10.00/10** on the tuned set (48/48, 16 questions x 3 runs) and **10.00/10** on a
+held-out set written afterwards. An intermediate held-out set scored **8.75**; its single
+failure is what widened the routing.
+
+Two of the "failures" during the loop were **bad assertions, not bad answers** - the check
+demanded one exact figure where several were legitimately right. Answering *why is my bill
+high* with "$14.84 of the $72.99 used over 37 days" is better than the $254.25 the test
+insisted on.
+
+## 22.7 The smoke test is unreliable while the publisher runs
+
+`smoke_test.py` starts its own hub on its own port but shares the **broker**. The board's
+real `home/loads/living/*` messages overwrite the test's fixtures, so `total_watts` came
+out 33.1 W and then 0 W against an expected 1340 - a failure that looks like a code
+regression and is not.
+
+```bash
+adb -s 3933751369 shell "pkill -f uno_q_publisher.py"   # then run smoke_test.py
+```
+
+With the publisher paused: **32/32**.
 

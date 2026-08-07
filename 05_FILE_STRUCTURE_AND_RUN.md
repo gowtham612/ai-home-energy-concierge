@@ -65,6 +65,9 @@ hackathon_energy_concierge/
 | `hub/rules.py` | 7 detection rules; R7 comfort guardrail | Pure logic, no I/O, no LLM — so every recommendation traces to a named rule and a named threshold |
 | `hub/llm.py` | Turns a finding into prose; overwrites numbers from the finding afterwards | Contains the deterministic `template_narrate()` fallback, so the demo survives the model dying |
 | `hub/server.py` | MQTT ingest, state fusion, rules loop, WebSocket push, `POST /api/apply` + safety gate | The only stateful component; everything else is pure functions |
+| `hub/history_digest.py` | Rolls 37 days of real 15-minute utility data into per-bucket kWh/$ totals, plus a typical-day baseline | The past is a different question from the present. Keeping it in its own module means a live answer can never accidentally be served from it |
+| `hub/ask.py` | `/ask` natural-language Q&A, plus the deterministic answerer | Questions the hub has already computed — R7's verdict, the combined cost, the anomaly score — never reach the model at all |
+| `hub/provenance.py` | Checks every number in an answer appears in its source digest | Confirms a figure EXISTS. It cannot tell that a real number answers the wrong question — see the session log §22 |
 | `hub/simulator.py` | Publishes realistic fake sensor/presence data | The stage fallback. Real rules, real math, real LLM — only sensors are fake |
 | `hub/cloud_report.py` | Statistical digest computed locally, interpretation delegated to a larger model | Kept off the critical path: it is a button, never a dependency |
 | `hub/benchmark.py` | p50/p95 latency, RSS, edge-filter efficiency | Technical Implementation is 40 of 100 points and is scored on measurements |
@@ -480,6 +483,7 @@ auditability claim, demonstrated.
 |---|---|---|
 | GET | `/` | dashboard |
 | GET | `/phone` | phone approval feed (plain page, not a PWA) |
+| GET | `/api/pacing` | demo-pacing values the running hub is actually using |
 | GET | `/api/state` | full fused snapshot + power history + realized totals |
 | GET | `/api/recos` | recent recommendations |
 | POST | `/api/presence` | `{"presence":"home"\|"away","distance_m":int}` |
