@@ -33,3 +33,14 @@ demo.mp4
 # local run logs
 code/*.err
 code/arduino/pc.env
+
+# Recorded sessions: household sensor data, stays on the machine that made it.
+# The project claims occupancy data never leaves the house — that has to remain
+# true of the repo too. Force-add a curated sample with `git add -f` if you want
+# one committed as evidence.
+code/data/sessions/
+# The built dataset. Synthetic today, but a real session would put household
+# behaviour in here, and "git add -A" must never be the thing that leaks it.
+code/data/reco_dataset.csv
+# Downloaded third-party corpora
+code/data/uci/

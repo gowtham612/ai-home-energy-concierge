@@ -22,7 +22,9 @@ except ImportError:
     requests = None
 
 from energy_model import (CO2_KG_PER_KWH, OFF_PEAK_USD_PER_KWH,
-                          ON_PEAK_USD_PER_KWH, annualize)
+                          ON_PEAK_USD_PER_KWH,
+                          SUPER_OFF_PEAK_USD_PER_KWH, annualize,
+                          tariff_provenance)
 
 CLOUD_BASE_URL = os.environ.get("CLOUD_BASE_URL", "")
 CLOUD_MODEL = os.environ.get("CLOUD_MODEL", "cloud-model")
@@ -72,6 +74,13 @@ def build_digest(state: Dict) -> Dict:
         "tariff_now": {"rate": tariff.get("rate"), "period": tariff.get("period")},
         "on_peak_rate": ON_PEAK_USD_PER_KWH,
         "off_peak_rate": OFF_PEAK_USD_PER_KWH,
+        # The cheapest tier has to be in the digest, not just the
+        # other two. Without it the model cannot answer "when is the
+        # cheapest time to run this?" — and if it named the right
+        # figure anyway, the provenance verifier would flag a CORRECT
+        # answer as invented, because the number was never given.
+        "super_off_peak_rate": SUPER_OFF_PEAK_USD_PER_KWH,
+        "tariff_source": tariff_provenance(),
         "co2_kg_per_kwh": CO2_KG_PER_KWH,
         "by_rule": [
             {"rule": k, "events": v["count"], "usd": round(v["usd"], 3),

@@ -13,9 +13,12 @@ Built for the Snapdragon Multiverse hackathon, August 2026.
 
 Homes waste energy because devices operate independently and have no awareness of
 context. Your air conditioner does not know you left the house. Your lights do not
-know the sun is out. And in San Diego, SDG&E charges roughly 81% more per kilowatt-hour
-between 4 PM and 9 PM than it does overnight - so *when* a load runs matters as much
-as *whether* it runs.
+know the sun is out. And in San Diego, SDG&E charges **79% more** per kilowatt-hour
+between 4 PM and 9 PM ($0.69654) than it does overnight ($0.38818 super off-peak) -
+so *when* a load runs matters as much as *whether* it runs.
+
+Those are the utility's published TOU-DR1 figures, not estimates: they live in
+`data/sdge_tou_dr1.json` with their source URL and effective date.
 
 No single device can see enough to fix this. A motion sensor sees an occupied room and
 concludes everything is fine, even at noon with the blinds open and every light on.
@@ -97,7 +100,7 @@ source. Each recommendation carries a `formula` string, shown in the UI, so any 
 on screen can be recomputed by hand:
 
 ```
-1100 W x 7200 s = 2.2000 kWh; 2.2000 kWh x $0.58/kWh (on_peak) = $1.276;
+1100 W x 7200 s = 2.2000 kWh; 2.2000 kWh x $0.69654/kWh (on_peak) = $1.532;
 2.2000 kWh x 0.25 kg/kWh = 0.5500 kg CO2
 ```
 
@@ -263,7 +266,7 @@ benchmark.
 | R3 `daylight_waste` | > 300 lux ambient, lights still on |
 | R4 `hvac_with_window_open` | A/C running 15+ min, no temperature drop, high humidity (heuristic) |
 | R5 `phantom_standby` | standby draw during an absence > 2 h |
-| R6 `peak_hour_heavy_load` | deferrable heavy load inside the 4–9 PM peak window; charges only the rate delta |
+| R6 `peak_hour_heavy_load` | deferrable heavy load inside the 4–9 PM peak window; charges only the rate delta **to super off-peak** ($0.30836/kWh), and recommends shifting past midnight rather than to 9 PM |
 | R7 `comfort_guardrail` | **suppresses** advice - and **refuses actuation** - above 27 °C / below 16 °C |
 
 R7 is why this is an assistant rather than a thermostat: it removes recommendations that
@@ -699,7 +702,9 @@ repository is open source.
 - [Arduino UNO Q documentation](https://docs.arduino.cc/hardware/uno-q/) — dual-brain MPU/MCU architecture and the Arduino Bridge RPC library
 - [Qualcomm AI Developer Workflow docs](https://docs.qualcomm.com/bundle/publicresource/topics/80-62010-1/welcome.html)
 - Load power figures: US DOE and ENERGY STAR published typical values (each entry in `hub/energy_model.py` carries its own `source` string)
-- Tariff structure: SDG&E TOU-DR1 residential time-of-use schedule
+- Tariff: [SDG&E Schedule TOU-DR1 Total Rates Table, effective 1/1/2026](https://www.sdge.com/sites/default/files/regulatory/1-1-26%20Schedule%20TOU-DR1%20Total%20Rates%20Table.pdf)
+  — transcribed into `data/sdge_tou_dr1.json`; period definitions from
+  [SDG&E's super-off-peak page](https://www.sdge.com/super-off-peak-residential)
 - Grid carbon intensity: EPA eGRID CAMX region / California Energy Commission
 
 ## Notes

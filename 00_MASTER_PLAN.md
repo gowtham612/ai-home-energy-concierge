@@ -233,7 +233,10 @@ Goal: **a fake but complete pipeline**. Nothing real, everything connected.
 Then pick **two** differentiators, no more:
 - [ ] **Auditable savings panel** — already built; make sure it is demoed explicitly.
 - [ ] **Cloud deep report** — "Weekly Plan" button → AI 100 → ranked actions with payback.
-- [ ] **Tariff/time-of-use awareness** — already built; SDG&E 4–9 PM peak, "shift the dryer."
+- [x] **Tariff/time-of-use awareness** — built, and now on SDG&E's **published**
+      TOU-DR1 table rather than approximate constants: three tiers (on-peak,
+      off-peak, **super off-peak**), two seasons. "Shift the dryer" is now
+      "shift it past midnight", which is worth ~40% more per kWh.
 - [ ] **Natural-language chat** — "why is my bill high?" against real logged state.
 
 ### Day 4 — Thu Aug 6: FREEZE at 5 PM
