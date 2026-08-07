@@ -2331,3 +2331,58 @@ accepting a cue for it would let two sources fight over one slider.
 simulator pane left open across a code change runs the old JavaScript; that has bitten
 this project before. Reload it.
 
+
+---
+
+# 30. Session close, 2026-08-07
+
+Twelve commits, all pushed, working tree clean, smoke **32/32** throughout.
+
+## 30.1 What changed
+
+| Area | Result |
+|---|---|
+| History data | 37 days of real utility data on `main` for the first time (S22) |
+| Beat 2 latency | ~10 s down to **0.6 s** cue-to-switch, ~5 s from the press (S21.11) |
+| Dollar figures | $0.00 became **$3.06** / **$0.67** (prop scaling S25 + pinned clock S27) |
+| Time dependence | demo pinned to 18:30 on-peak; no longer depends on when you record (S27) |
+| `/ask` quality | 7.5 to **10/10** tuned, **10/10** held-out (S22.6) |
+| What-if questions | answerable from a 21-appliance catalogue, computed not guessed (S28.3) |
+| Beat 5 | refusal reachable, plus a recorded human override (S28.1, S29.1) |
+| Phone access | `/qr`, because Android cannot resolve `.local` at all (S24) |
+| External changes | plug polled at 4 s instead of 30 s (S26) |
+| Autonomy scope | learned tier detects; only deterministic rules actuate (S23) |
+
+## 30.2 The three that were nearly invisible
+
+**GenieX wedged silently.** Process alive at 9 GB and 7541 s CPU, `/v1/models` timing
+out. Everything kept answering, from templates. Found only because narration said
+`(template)`. The graceful fallback is precisely what hid it.
+
+**The provenance badge does not mean "right".** Every defect in S22 was marked
+`verified`, including an answer that was 285x wrong, because every number quoted was
+genuinely present in the digest. It means "not invented".
+
+**A backspace byte in a regex.** A word boundary written through a shell heredoc became
+0x08. The pattern compiled, imported, and matched nothing. Visible only under `cat -A`.
+
+## 30.3 What was deliberately NOT done
+
+- **No mesh VPN** for a permanent phone URL. Adding a network dependency the day before
+  filming is a worse risk than scanning a QR code.
+- **R7 still deletes findings** rather than annotating them. The fix is understood
+  (S28.1) but it is a behaviour change to a safety gate, not something to land untested
+  the night before.
+- **Planning docs still say PWA.** They describe intent at the time of writing; editing
+  them to match the outcome would be its own dishonesty (S21.14).
+- **The mid-spin-down "off at 1077 W" reading is not clamped.** It is a real measurement
+  that self-corrects on the next 4 s poll (S26.4).
+
+## 30.4 Physical setup for the shoot
+
+Two things are hardware, not software, and both have already produced a "broken" demo:
+
+- the bulb's **wall switch** must be on. A smart bulb without mains power is invisible to
+  discovery, and `lights` binds as unreachable while `ac` looks fine.
+- the **fan must be plugged into the smart plug**. Currently unplugged by choice; an
+  empty plug reads 0 W and every saving rounds to zero.
