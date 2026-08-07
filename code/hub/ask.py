@@ -152,6 +152,34 @@ def _digest_lines(state: Dict,
             allowed[k] = f"{d[k]}"
             lines.append(f"{k.upper()}: {d[k]}")
 
+    # Run-rate projection, so "how does today compare?" has both sides of the
+    # comparison and both are verifiable. The hub holds minutes of live data,
+    # never a day of it, so a measured daily total does not exist and must not
+    # be implied.
+    try:
+        _hd2 = build_history_digest()
+        _tw2 = d.get("current_watts", state.get("total_watts"))
+        _rt2 = (state.get("tariff") or {}).get("rate")
+        if _hd2 and _tw2 and _rt2 and _hd2.get("avg_kwh_per_day"):
+            _pk = round(float(_tw2) / 1000.0 * 24, 2)
+            _pu = round(_pk * _rt2, 2)
+            _pct = round((_pk - _hd2["avg_kwh_per_day"]) / _hd2["avg_kwh_per_day"] * 100)
+            allowed["today.projected_kwh"] = f"{_pk}"
+            allowed["today.projected_usd"] = f"{_pu}"
+            allowed["today.vs_typical_pct"] = f"{abs(_pct)}"
+            lines.append(
+                f"TODAY AT THIS RATE (a PROJECTION from the current instant, NOT a "
+                f"measured total for today): the home is drawing {_tw2} W; sustained "
+                f"for 24 h that is {_pk} kWh, versus a typical day of "
+                f"{_hd2['avg_kwh_per_day']} kWh over the {_hd2['window_days']}-day "
+                f"history -- {abs(_pct)}% "
+                f"{'higher' if _pct > 0 else 'lower'}. At the CURRENT rate all day "
+                f"that would be ${_pu}, but a real day spans several rate periods, "
+                f"so compare the kWh rather than the dollars."
+            )
+    except Exception:
+        pass
+
     # The appliance catalogue, so a what-if answer's numbers are IN the digest
     # and verify. Without this the computed answer was correct and flagged
     # "PROVENANCE FAIL: 3000, 1.16" -- the badge saying unverified next to a
@@ -397,6 +425,8 @@ _COMPUTED_INTENTS = (
     ("unusual", "anomal", "strange"),                          # edge detector
     ("what if", "instead of", "cost to run", "shift the",
      "move the", "run the"),                                   # appliance what-if
+    ("compare", "usual month", "typical day", "average day",
+     "usual day", "normal day"),                               # today vs baseline
 )
 
 
@@ -470,13 +500,53 @@ def deterministic_answer(question: str, state: Dict) -> str:
             # No car_super_off_peak_pct here either: it is 100% by construction
             # (see the note in _digest_lines), so quoting it as "already
             # off-peak" would be praising a labelling artifact.
+            # A "how does today compare" question needs something to compare
+            # AGAINST and something to compare FROM. The baseline is the typical
+            # day in the history. The other side cannot be "today's total" --
+            # the hub has minutes of live data, not a day of it, and inventing a
+            # daily total from that would be exactly the fabrication this
+            # project refuses elsewhere.
+            #
+            # What IS honest is a run rate: what a full day would come to if the
+            # current draw continued. Every energy app shows this, it is
+            # arithmetic over two figures already on the record, and it is
+            # labelled as a projection rather than a measurement.
+            tw = state.get("total_watts")
+            rate = (state.get("tariff") or {}).get("rate")
+            base_kwh = hd.get("avg_kwh_per_day")
+            if tw and rate and base_kwh:
+                proj_kwh = round(tw / 1000.0 * 24, 2)
+                proj_usd = round(proj_kwh * rate, 2)
+                pct = round((proj_kwh - base_kwh) / base_kwh * 100)
+                if pct > 5:
+                    verdict = f"about {abs(pct)}% HIGHER than a typical day"
+                elif pct < -5:
+                    verdict = f"about {abs(pct)}% LOWER than a typical day"
+                else:
+                    verdict = "close to a typical day"
+                return (f"A typical day over the last {hd['window_days']} days was "
+                        f"{base_kwh} kWh (${hd['avg_usd_per_day']}). Right now the home "
+                        f"is drawing {tw} W; if that continued for 24 hours it would "
+                        f"come to {proj_kwh} kWh — {verdict}. That is a projection from "
+                        f"the current instant, not a measured total for today. At the "
+                        f"current ${rate}/kWh all day it would be ${proj_usd}, though a "
+                        f"real day crosses several rate periods, so the kWh is the "
+                        f"sounder comparison. Breakdown "
+                        f"over the {hd['window_days']} days: an estimated "
+                        f"{hd['hvac_kwh']} kWh on heating/cooling — the A/C — "
+                        f"(${hd['hvac_usd']}), {hd['car_charging_kwh']} kWh on car "
+                        f"charging (${hd['car_charging_usd']}), "
+                        f"{hd['lights_or_fan_kwh']} kWh on lights/fan, all inferred "
+                        f"from whole-home data rather than measured per-circuit.")
             return (f"Over the last {hd['window_days']} days: an estimated "
                     f"{hd['hvac_kwh']} kWh on heating/cooling — the A/C — "
                     f"(${hd['hvac_usd']}), "
                     f"{hd['car_charging_kwh']} kWh on car charging "
                     f"(${hd['car_charging_usd']}), "
                     f"{hd['lights_or_fan_kwh']} kWh on lights/fan. "
-                    f"All figures cover the whole {hd['window_days']} days, not one day. "
+                    f"A typical day in that window was {hd.get('avg_kwh_per_day')} kWh "
+                    f"(${hd.get('avg_usd_per_day')}). "
+                    f"All other figures cover the whole {hd['window_days']} days, not one day. "
                     f"These are inferred from whole-home data, not measured per-circuit.")
         return "No historical usage data is available right now."
 

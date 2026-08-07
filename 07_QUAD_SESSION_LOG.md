@@ -2386,3 +2386,58 @@ Two things are hardware, not software, and both have already produced a "broken"
   discovery, and `lights` binds as unreachable while `ac` looks fine.
 - the **fan must be plugged into the smart plug**. Currently unplugged by choice; an
   empty plug reads 0 W and every saving rounds to zero.
+
+---
+
+# 31. "How does today compare?" now answers (2026-08-07)
+
+The last open item from S28. The question is a button on the `/ask` page and it answered
+that no monthly baseline existed -- correctly, because there was nothing to compare
+against on either side.
+
+## 31.1 Both sides of the comparison
+
+**Baseline:** the typical day already computed in S27.3 -- 15.09 kWh, $6.87 over the
+37-day window.
+
+**Today:** deliberately NOT a measured daily total. The hub holds minutes of live data,
+never a day of it, so a "today so far" figure does not exist and inventing one would be
+the fabrication this project refuses everywhere else.
+
+What is honest is a **run rate**: what a full day would come to if the current draw
+continued. Every energy app shows this, it is arithmetic over two figures already on the
+record, and it is labelled a projection rather than a measurement.
+
+```
+A typical day over the last 37 days was 15.09 kWh ($6.87). Right now the home is
+drawing 526.0 W; if that continued for 24 hours it would come to 12.62 kWh -- about
+16% LOWER than a typical day. That is a projection from the current instant, not a
+measured total for today. At the current $0.69654/kWh all day it would be $8.79,
+though a real day crosses several rate periods, so the kWh is the sounder comparison.
+```
+
+`[computed / verified]`, no unverified numbers.
+
+## 31.2 The dollar figure needed a caveat the kWh does not
+
+The kWh comparison is sound: 12.62 projected against 15.09 typical, like for like.
+
+The dollar comparison is not. $8.79 applies the CURRENT rate to a whole day, while the
+$6.87 baseline is what 37 real days actually billed across on-peak, off-peak and
+super-off-peak. Comparing them directly is apples to oranges, and at the pinned 18:30
+on-peak rate it inflates the projection by roughly 45%.
+
+Rather than drop the figure, both the digest line and the answer say the kWh is the
+sounder comparison. A number with its limitation stated is more useful than a missing
+one, and quietly comparing the two would have been the kind of error the provenance
+verifier cannot catch -- every figure is real, the comparison is not.
+
+## 31.3 Routing
+
+`compare` / `usual month` / `typical day` / `average day` join `_COMPUTED_INTENTS`: this
+is arithmetic over the tariff and a baseline, and the prompt forbids the model doing
+arithmetic. None of those strings appears inside "unusual", so the anomaly intent is
+untouched -- verified both route where intended.
+
+The projection is also published into the digest and the allowed map, so the LLM path can
+cite it and it verifies there too.
