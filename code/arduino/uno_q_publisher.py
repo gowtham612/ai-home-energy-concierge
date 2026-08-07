@@ -306,6 +306,11 @@ def wait_for_mcu(timeout_s: float = MCU_WAIT_S) -> bool:
 MCU_SOCK: Optional[socket.socket] = None
 MCU_SOCK_LOCK = threading.Lock()
 
+# Running count of telemetry lines skipped to stay current. Reported rather
+# than hidden: falling behind is a real degradation, and a silent version of
+# this cost an entire debugging session.
+STALE_SKIPPED = 0
+
 
 def mcu_send(text: str) -> bool:
     """Write a line back to the MCU. False if there is no socket or it failed."""
@@ -349,15 +354,57 @@ def tcp_lines(host: str = MCU_TCP_HOST, port: int = MCU_TCP_PORT):
             print(f"[uno_q] MCU monitor connected at tcp://{host}:{port}", flush=True)
             while RUNNING:
                 try:
-                    chunk = s.recv(512)
+                    chunk = s.recv(4096)
                 except socket.timeout:
                     continue
                 if not chunk:
                     break          # router closed the stream (re-flash) — reconnect
                 buf += chunk
+
+                # Drain everything else already waiting in the kernel buffer
+                # before parsing. The consumer does synchronous Kasa I/O that
+                # can take seconds; the MCU emits at a steady 1 Hz regardless.
+                # Reading one line per pass means any stall puts us behind a
+                # producer we can never outrun, so the lag is PERMANENT — it
+                # was seen at ~87 KB, about ten minutes of telemetry, with
+                # button presses arriving minutes late or not at all.
+                s.setblocking(False)
+                try:
+                    while True:
+                        more = s.recv(65536)
+                        if not more:
+                            break
+                        buf += more
+                except OSError:
+                    pass            # nothing left to read — the normal exit
+                finally:
+                    s.settimeout(2)
+
+                pending = []
                 while b"\n" in buf:
                     line, buf = buf.split(b"\n", 1)
-                    yield line.decode("utf-8", errors="ignore").strip()
+                    pending.append(line.decode("utf-8", errors="ignore").strip())
+
+                # Acks are EVENTS: dropping one strands the press that caused
+                # it, so every single one is forwarded. Telemetry is a STATE
+                # SNAPSHOT and the button fields are cumulative counters, so
+                # the newest line already carries everything the skipped ones
+                # would have said — coalescing to it is lossless, which is
+                # exactly why counters were chosen over edges.
+                fresh = [L for L in pending if L and '"ack"' not in L]
+                for line in pending:
+                    if '"ack"' in line:
+                        yield line
+                if fresh:
+                    skipped = len(fresh) - 1
+                    if skipped:
+                        global STALE_SKIPPED
+                        STALE_SKIPPED += skipped
+                        if STALE_SKIPPED % 50 < skipped:
+                            print(f"[uno_q] behind the MCU — skipped "
+                                  f"{STALE_SKIPPED} stale telemetry lines to "
+                                  f"stay current", flush=True)
+                    yield fresh[-1]
         except Exception as exc:
             print(f"[uno_q] MCU monitor error: {exc} — retrying in 2s", flush=True)
             time.sleep(2)
