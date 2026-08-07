@@ -16,6 +16,7 @@ import asyncio
 import json
 import os
 import socket
+import sys
 import threading
 import time
 from collections import deque
@@ -38,6 +39,8 @@ from fastapi.staticfiles import StaticFiles
 MQTT_HOST = os.environ.get("MQTT_HOST", "localhost")
 MQTT_PORT = int(os.environ.get("MQTT_PORT", "1883"))
 HTTP_PORT = int(os.environ.get("HTTP_PORT", "8000"))
+# Room a board-side cue applies to. Single-room demo; named, not inlined.
+ROOM_DEFAULT = os.environ.get("ROOM", "living")
 
 EVAL_INTERVAL_S = 5
 RECO_COOLDOWN_S = 600      # do not re-narrate the same finding for 10 min — anti-spam
@@ -250,6 +253,8 @@ def _rate(dt: datetime):
 
 
 STORE = StateStore()
+# Findings already auto-acted on, so the loop does not re-fire every 5 s.
+AUTO_ACTED: set = set()
 LLM = LLMClient()
 app = FastAPI(title="AI Home Energy Concierge")
 CLIENTS: List[WebSocket] = []
@@ -263,7 +268,8 @@ LOOP: Optional[asyncio.AbstractEventLoop] = None
 def on_connect(client, userdata, flags, rc, properties=None):
     STORE.mqtt_connected = (rc == 0)
     print(f"[mqtt] connected rc={rc}")
-    for topic in ("home/sensors/#", "home/loads/#", "home/context/#", "home/actuator/#"):
+    for topic in ("home/sensors/#", "home/loads/#", "home/context/#",
+              "home/actuator/#", "home/demo/cue"):
         client.subscribe(topic)
         print(f"[mqtt] subscribed {topic}")
 
@@ -289,6 +295,41 @@ def on_message(client, userdata, msg):
             print(f"[mqtt] actuator confirmed {parts[2]}/{parts[3]} -> "
                   f"{payload.get('state')} via {payload.get('source')} "
                   f"ok={payload.get('ok')}")
+        elif msg.topic == "home/demo/cue":
+            # A Modulino button press, relayed by the publisher. Goes through the
+            # same cue path the autopilot uses, so a physical press and a scripted
+            # one move the simulator's controls identically.
+            control = str(payload.get("control", ""))
+            if control in ("presence", "occupancy", "lux", "humidity", "temp_c", "ask"):
+                value = payload.get("value")
+                with STORE.lock:
+                    STORE._demo_cue_seq += 1
+                    STORE.demo_cue = {"id": STORE._demo_cue_seq, "control": control,
+                                      "value": value,
+                                      "note": str(payload.get("note", ""))[:120],
+                                      "ts": time.time()}
+                # A cue from the BOARD is applied here as well as broadcast.
+                # Cues are normally applied BY the simulator page, which is what
+                # makes its switches move — but that means a physical button
+                # press does nothing at all when no browser is open. A hardware
+                # button has to work whether or not someone is looking at a
+                # screen. The page still moves its control on the broadcast, so
+                # both end up agreeing; the values are identical, so applying
+                # twice is idempotent.
+                #
+                # Deliberately NOT done for the HTTP /api/demo/cue path: there,
+                # "did the state change?" is the proof that the PAGE acted, and
+                # applying it here would make that check meaningless.
+                try:
+                    if control == "presence":
+                        STORE.update_user({"presence": str(value),
+                                           "distance_m": 2400 if value == "away" else 0,
+                                           "ts": time.time()})
+                    elif control in ("occupancy", "lux", "humidity", "temp_c"):
+                        STORE.update_room(ROOM_DEFAULT, {control: value, "ts": time.time()})
+                except Exception as exc:
+                    print(f"[demo] could not apply board cue: {exc}")
+                print(f"[demo] cue from board: {control} -> {value}")
         elif msg.topic == "home/context/user":
             STORE.update_user(payload)
         elif msg.topic == "home/context/clock":
@@ -346,6 +387,49 @@ def evaluation_tick() -> List[Recommendation]:
             STORE.plan = planner.PLANNER.plan(findings).to_dict()
         except Exception as exc:
             print(f"[eval] planner unavailable: {exc}")
+
+    # --- AUTO-ACT on low-risk loads (AI_AUTO_LIGHTS=1) -----------------------
+    # Beat 2 of the demo: the UNO Q detects an empty room and the lights go off
+    # by themselves, while the A/C still waits for a human. That split is the
+    # point — autonomy is granted per-load by RISK, not granted wholesale.
+    #
+    # Scoped hard, because this is the one place the system acts without being
+    # asked:
+    #   * lights ONLY. Never HVAC, never anything comfort-affecting.
+    #   * still goes through _guardrail_allows, so R7 governs it exactly as it
+    #     governs a human approval.
+    #   * booked as approved_by="auto" so the audit trail never implies a person
+    #     pressed something.
+    # If you enable this, say so on stage. "A human approves every action" stops
+    # being true the moment it is on.
+    if os.environ.get("AI_AUTO_LIGHTS", "0") == "1":
+        for f in findings:
+            if f.load_key.rsplit("/", 1)[-1] != "lights":
+                continue
+            # Dedupe by LOAD, not by finding id. R1 (unoccupied) and R3
+            # (daylight) both target living/lights, so keying on the finding
+            # sent two switch-off commands for one bulb — harmless but noisy,
+            # and it would read as a stutter on camera.
+            if f.load_key in AUTO_ACTED or f.id in STORE.applied_ids:
+                continue
+            # Nothing to do if it is already off. This is also what stops the
+            # loop re-firing every 5 s once the bulb has actually gone out.
+            if (STORE.loads.get(f.load_key) or {}).get("state") != "on":
+                continue
+            allowed, reason = _guardrail_allows(snap, f, f.load_key, "off", now_dt)
+            if not allowed:
+                print(f"[auto] refused {f.load_key}: {reason}")
+                continue
+            AUTO_ACTED.add(f.load_key)
+            cmd = {"action": "off", "reco_id": f.id, "approved_by": "auto",
+                   "ts": time.time()}
+            if MQTT_CLIENT is not None:
+                try:
+                    MQTT_CLIENT.publish(f"home/command/{f.load_key}", json.dumps(cmd))
+                    print(f"[auto] {f.load_key} -> off  (rule {f.rule_name}, "
+                          f"no human in the loop by design)")
+                except Exception as exc:
+                    print(f"[auto] publish failed: {exc}")
 
     fresh: List[Recommendation] = []
     now = time.time()
@@ -474,7 +558,7 @@ async def api_demo_cue(request: Request):
     """
     body = await request.json()
     control = str(body.get("control", "")).strip()
-    if control not in ("presence", "occupancy", "lux", "humidity", "temp_c"):
+    if control not in ("presence", "occupancy", "lux", "humidity", "temp_c", "ask"):
         return JSONResponse({"error": f"unknown control {control!r}"}, status_code=400)
     with STORE.lock:
         STORE._demo_cue_seq += 1
@@ -749,6 +833,15 @@ async def ws_endpoint(ws: WebSocket):
         if ws in CLIENTS:
             CLIENTS.remove(ws)
 
+
+# Line-buffer stdout. Redirected to a file it block-buffers, which hid every
+# diagnostic this process printed — including the [auto] actuation lines —
+# until the buffer happened to fill. A log you cannot read during the run is
+# not a log.
+try:
+    sys.stdout.reconfigure(line_buffering=True)
+except Exception:
+    pass
 
 if __name__ == "__main__":
     import uvicorn

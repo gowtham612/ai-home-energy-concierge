@@ -61,6 +61,7 @@ hackathon_energy_concierge/
 | File | Responsibility | Why it exists separately |
 |---|---|---|
 | `hub/energy_model.py` | watts → kWh → dollars → kg CO₂; the SDG&E tariff; the `formula` string | Isolated so it is trivially unit-testable and so **no other module ever does arithmetic**. Every number on screen originates here. |
+| `data/sdge_tou_dr1.json` | The SDG&E TOU-DR1 rate table — three tiers, two seasons — with its source URL and effective date | Rates are **data, not constants**, so the citation travels with the number. Updating on the next tariff revision is a transcription, not a code change. |
 | `hub/rules.py` | 7 detection rules; R7 comfort guardrail | Pure logic, no I/O, no LLM — so every recommendation traces to a named rule and a named threshold |
 | `hub/llm.py` | Turns a finding into prose; overwrites numbers from the finding afterwards | Contains the deterministic `template_narrate()` fallback, so the demo survives the model dying |
 | `hub/server.py` | MQTT ingest, state fusion, rules loop, WebSocket push, `POST /api/apply` + safety gate | The only stateful component; everything else is pure functions |
@@ -187,7 +188,7 @@ Open the URL the hub prints (e.g. `http://192.168.1.50:8000/`).
 
 | t | On the dashboard |
 |---|---|
-| 0 s | ~1460 W, on-peak $0.58/kWh, **no findings** — everything running is in use |
+| 0 s | ~1460 W, on-peak $0.69654/kWh, **no findings** — everything running is in use |
 | 15 s | presence flips to **away**, distance climbs |
 | 25 s | **R2 critical** "Cooling an empty home" + **R1 serious** "Lights left on" |
 | 45 s | loads off, power collapses on the chart |

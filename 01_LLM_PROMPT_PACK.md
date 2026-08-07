@@ -102,7 +102,8 @@ REQUIREMENTS:
    clothes_dryer, dishwasher, fridge, standby_phantom.
 
 2. A TARIFF structure for San Diego SDG&E time-of-use:
-   - off_peak_usd_per_kwh = 0.32
+   - rates come from `data/sdge_tou_dr1.json` (SDG&E TOU-DR1, three tiers,
+     seasonal). Do NOT hardcode rates — call `rate_at(dt)` / `cheapest_rate(dt)`
    - on_peak_usd_per_kwh  = 0.58
    - on-peak window 16:00-21:00 local, every day
    - function `rate_at(dt)` returning (rate, "on_peak"|"off_peak")
@@ -118,7 +119,7 @@ REQUIREMENTS:
      `WasteEstimate` with fields: kwh, usd, co2_kg, rate_used, period_label,
      watts, load_label, source, and a `formula` string that literally spells out
      the calculation performed, e.g.
-     "60 W x 3600 s = 0.060 kWh; 0.060 kWh x $0.58/kWh (on_peak) = $0.035"
+     "60 W x 3600 s = 0.060 kWh; 0.060 kWh x $0.69654/kWh (on_peak) = $0.042"
    - `annualize(usd_per_event, events_per_week)` -> float
 
 5. The `formula` string is a hard requirement. The dashboard displays it so a

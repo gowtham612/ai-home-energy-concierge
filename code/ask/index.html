@@ -177,6 +177,30 @@
 
   go.addEventListener("click", ask);
   qIn.addEventListener("keydown", function(e){ if(e.key === "Enter") ask(); });
+
+  // ---------- autonomous-demo cue ----------
+  // tools/demo_autopilot.py drives the demo. Without this it would have to call
+  // /api/ask directly, and the answer would never appear on screen - the whole
+  // point of this page during a demo is that a visitor SEES the question typed
+  // and the answer stream with its badge. So a cue types into the real input
+  // and clicks the real button; nothing here bypasses the normal path.
+  //
+  // Polled rather than pushed: this page has no websocket (it is request/reply
+  // by nature), and a 1.5s poll of a tiny endpoint is cheaper than adding one.
+  var lastAskCue = 0;
+  setInterval(function(){
+    if(busy) return;                       // never interrupt an answer mid-stream
+    fetch("/api/state").then(function(r){ return r.json(); }).then(function(s){
+      var cue = s && s.demo_cue;
+      if(!cue || cue.control !== "ask" || !cue.id || cue.id <= lastAskCue) return;
+      lastAskCue = cue.id;
+      qIn.value = String(cue.value || "");
+      qIn.style.transition = "box-shadow .2s";
+      qIn.style.boxShadow = "0 0 0 3px var(--npu)";
+      setTimeout(function(){ qIn.style.boxShadow = ""; }, 900);
+      ask();
+    }).catch(function(){});
+  }, 1500);
 })();
 </script>
 </body>

@@ -1224,3 +1224,123 @@ failure — the check found it. Cost: 110 µs.
 ## 19.7 Flags
 
 All OFF by default. `AI_ANOMALY=1` `AI_PLAN=1` `AI_ASK=1`. Q&A page at `/ask`.
+
+---
+
+# §20 The tariff was approximate; now it is SDG&E's published table (2026-08-06)
+
+Branch **`sdge-real-tariff`** → PR #1 against `main`. Contained: five code files
+plus doc sweeps. `smoke_test.py` 32/32.
+
+## 20.1 What was wrong
+
+`energy_model.py` carried two constants labelled *"Rates approximate SDG&E
+TOU-DR1"*: `$0.32` off-peak, `$0.58` on-peak, 4–9 PM, no seasons. Against the
+utility's own table they are 35–40% low **and missing an entire pricing tier**.
+
+| period | was | SDG&E summer | SDG&E winter |
+|---|---|---|---|
+| on-peak | 0.58 | **0.69654** | **0.62200** |
+| off-peak | 0.32 | **0.47560** | **0.54019** |
+| super off-peak | *did not exist* | **0.38818** | **0.44933** |
+
+Source: Schedule TOU-DR1 Total Rates Table effective 1/1/2026, Total Electric
+Rate column (UDC + EECC + WF-NBC/DWR-BC), bundled residential.
+
+## 20.2 The third tier is a different recommendation, not a rounding fix
+
+With two tiers the only advice expressible is *"move it out of peak"*. With
+super off-peak the system can say *"run it after midnight"*, and that is worth
+roughly 40% more per kWh shifted:
+
+```
+off-peak delta        0.69654 - 0.47560 = $0.22094/kWh
+super off-peak delta  0.69654 - 0.38818 = $0.30836/kWh
+```
+
+R6 now measures against `cheapest_rate()` and its suggested action is "Delay
+this cycle until after midnight". Quoting the off-peak delta understated the
+saving by a third *and* named a worse time to run the load.
+
+## 20.3 Rates are data, not constants
+
+`data/sdge_tou_dr1.json` holds the table with `source_url`, `effective_date`
+and which column was transcribed — the same discipline as the `formula`
+strings. Updating on the next revision is a transcription, not a code change.
+
+Loaded **and validated** at import (every season × period must be a number);
+a missing or truncated file falls back to the old built-in rates with a printed
+warning. A tariff file is not worth a dead demo.
+
+`energy_model.py`'s docstring previously claimed "No I/O … pure functions only".
+That is now false by one file read, and the docstring says so rather than
+quietly becoming wrong.
+
+## 20.4 Periods
+
+| period | hours |
+|---|---|
+| on-peak | 16:00–21:00 every day, both seasons — the *price* differs by season, the hours do not |
+| super off-peak | weekdays 00:00–06:00 and 10:00–14:00; weekends 00:00–14:00 |
+| off-peak | the remainder |
+
+The weekday 10:00–14:00 block was previously March/April only and is now
+year-round. Public holidays are treated as weekdays: the calendar is not
+modelled, which makes estimates **conservative** (it charges the higher rate).
+
+## 20.5 October is summer — the bug this already caused
+
+First revision had summer as June–September. SDG&E's summer is **June 1 –
+October 31**, winter **November 1 – May 31**. The error priced every October
+evening at the winter on-peak rate, `$0.62200` instead of `$0.69654`: a 12%
+understatement for a whole month, on the tier where the money is. Fixed in
+`8d0f4c1`.
+
+The rate table splits Summer/Winter **without printing the date ranges**, so the
+boundary is the one value here not read off an SDG&E document. It selects which
+column applies, never a rate. Flagged in the JSON under
+`not_confirmed_from_primary_source`. Closing it properly needs a real SDG&E bill
+from June–October. It does **not** affect the demo, which runs in August.
+
+## 20.6 The rate reached only one of the three model tiers
+
+Worth checking after any change to what the models are told:
+
+| tier | before | why |
+|---|---|---|
+| narration `llm.py` | OK | R6's evidence lines carry both rates and the schedule/effective date |
+| Q&A `ask.py` | **NO** | the digest exposed `on_peak_rate` and `off_peak_rate` only |
+| cloud report | **NO** | same digest, same omission |
+
+So the cheapest tier — the entire point of the change — was invisible to the
+tier a judge is most likely to interrogate. *"When is the cheapest time to run
+the dryer?"* was unanswerable, and had the model named `$0.38818` anyway, the
+provenance verifier would have flagged a **correct** answer as invented, because
+that number was never given to it. `build_digest()` now carries
+`super_off_peak_rate` and `tariff_source`.
+
+**No markdown file is ever read by any model.** Every prompt is assembled in
+Python from the rules engine and the digest — the only `.md` reference in `hub/`
+is a `print()` in `benchmark.py`. That is what makes the provenance check
+meaningful: the set of facts the model was given is enumerable.
+
+## 20.7 A near-miss worth recording
+
+Committing on `main` with `git add -A` staged **30 MB of recorded household
+data**. The `code/data/sessions/` and `reco_dataset.csv` gitignore rules existed
+only on a feature branch, so `main` had no protection at all. Caught before
+push; the rules are in this PR. The project claims occupancy data never leaves
+the house — that has to be true of the repo too.
+
+## 20.8 State
+
+- One smoke-test expectation moved with the rates: 2 h of A/C on-peak is
+  **$1.532**, not $1.276. The code was right; the constant was stale.
+- Docs swept for the old figures: `code/README.md`, `01_LLM_PROMPT_PACK.md`,
+  `05_FILE_STRUCTURE_AND_RUN.md`, `08_HARDWARE_PIVOT_PLAN.md`,
+  `00_MASTER_PLAN.md`.
+- **NOT verified: no LLM ran.** GenieX needs Snapdragon; this was built on an
+  x86 box, so narration, plan and Q&A paths are unexercised. Run
+  `AI_ASK=1 python hub/server.py` on the X Elite and ask *"when is the cheapest
+  time to run the dryer?"* — that question is now answerable and is a good demo
+  beat.

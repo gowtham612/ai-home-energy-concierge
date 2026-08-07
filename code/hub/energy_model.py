@@ -7,13 +7,19 @@ DESIGN RULE: the LLM never computes. It receives numbers from this module and is
 allowed only to phrase them. Each estimate carries a `formula` string that spells
 out the calculation so a judge can audit any figure on screen by hand.
 
-No I/O, no MQTT, no LLM. Pure functions only.
+No MQTT, no LLM, no network. Pure functions, with ONE exception: the SDG&E
+tariff table is read from data/sdge_tou_dr1.json at import, so the published
+rates carry their source URL and effective date instead of being anonymous
+constants. That read is wrapped and falls back to built-in rates, so this
+module still imports on a machine where the file is missing.
 """
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from datetime import datetime, time
+from pathlib import Path
 from typing import Dict, Tuple
 
 # --------------------------------------------------------------------------
@@ -39,30 +45,126 @@ LOADS: Dict[str, Dict] = {
 }
 
 # --------------------------------------------------------------------------
-# Tariff — San Diego SDG&E time-of-use
+# Tariff — SDG&E Schedule TOU-DR1, from the published rate table
 # --------------------------------------------------------------------------
-# Rates approximate SDG&E TOU-DR1 residential. On-peak 4 PM - 9 PM daily.
-# Local touch: the demo is in San Diego, and peak-shifting advice is only
-# meaningful against a real local tariff structure.
+# The rates live in data/sdge_tou_dr1.json with their source URL and effective
+# date, NOT as constants here. They were previously two hardcoded numbers
+# labelled "approximate": $0.32 off-peak and $0.58 on-peak. The real published
+# figures are about 40% higher, and there is a THIRD tier those constants could
+# not express at all.
+#
+# The third tier is not a detail — it is a different recommendation. With two
+# tiers the only advice available is "move it out of peak". With super-off-peak
+# the system can say "run the dryer after midnight", which is worth roughly
+# twice as much per kWh shifted.
+#
+# Loaded at import, with the previous constants kept as a fallback so a missing
+# or malformed file degrades to the old behaviour instead of taking the hub
+# down. A tariff file is not worth a dead demo.
 
-OFF_PEAK_USD_PER_KWH = 0.32
-ON_PEAK_USD_PER_KWH = 0.58
+TARIFF_PATH = Path(__file__).resolve().parent.parent / "data" / "sdge_tou_dr1.json"
+
+_FALLBACK_TARIFF = {
+    "schedule": "TOU-DR1 (built-in fallback)",
+    "effective_date": "unknown",
+    "source_url": "",
+    "seasons": {
+        "summer": {"months": [6, 7, 8, 9],
+                   "on_peak": 0.58, "off_peak": 0.32, "super_off_peak": 0.32},
+        "winter": {"months": [10, 11, 12, 1, 2, 3, 4, 5],
+                   "on_peak": 0.58, "off_peak": 0.32, "super_off_peak": 0.32},
+    },
+}
+
+
+def _load_tariff() -> Dict:
+    try:
+        with TARIFF_PATH.open("r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        # Validate rather than trust: a truncated file that still parses would
+        # otherwise produce silent zero-dollar savings.
+        for season in ("summer", "winter"):
+            for period in ("on_peak", "off_peak", "super_off_peak"):
+                if not isinstance(data["seasons"][season][period], (int, float)):
+                    raise ValueError(f"{season}.{period} is not a number")
+        return data
+    except Exception as exc:            # missing, malformed, or incomplete
+        print(f"[tariff] using built-in fallback rates: {exc}")
+        return dict(_FALLBACK_TARIFF)
+
+
+TARIFF = _load_tariff()
+
+# Season boundaries. The only value here NOT read off an SDG&E document — the
+# rate table splits Summer/Winter without printing the dates. It selects which
+# column applies; it never changes a rate.
+SUMMER_MONTHS = set(TARIFF["seasons"]["summer"]["months"])
+
+# On-peak is 4-9 PM every day, in both seasons. Only the price changes.
 ON_PEAK_START = time(16, 0)
 ON_PEAK_END = time(21, 0)
+
+# Super off-peak: midnight-6 AM and 10 AM-2 PM on weekdays; midnight-2 PM on
+# weekends and holidays. The 10-14 weekday block used to be March/April only.
+# Public holidays are treated as weekdays — the calendar is not modelled, which
+# makes the estimate CONSERVATIVE (it charges the higher off-peak rate).
+SUPER_OFF_PEAK_WEEKDAY = ((time(0, 0), time(6, 0)), (time(10, 0), time(14, 0)))
+SUPER_OFF_PEAK_WEEKEND = ((time(0, 0), time(14, 0)),)
+
+# Back-compatible names. Several modules import these directly; they resolve to
+# the SUMMER figures, which is the worst case and the season the demo runs in.
+ON_PEAK_USD_PER_KWH = TARIFF["seasons"]["summer"]["on_peak"]
+OFF_PEAK_USD_PER_KWH = TARIFF["seasons"]["summer"]["off_peak"]
+SUPER_OFF_PEAK_USD_PER_KWH = TARIFF["seasons"]["summer"]["super_off_peak"]
 
 # California grid average carbon intensity.
 # Source: CA Energy Commission / EPA eGRID CAMX region, ~0.25 kg CO2 per kWh.
 CO2_KG_PER_KWH = 0.25
 
 
-def rate_at(dt: datetime) -> Tuple[float, str]:
-    """Return (usd_per_kwh, period_label) for a given local datetime.
+def season_of(dt: datetime) -> str:
+    return "summer" if dt.month in SUMMER_MONTHS else "winter"
 
-    On-peak is 16:00-21:00 inclusive of start, exclusive of end.
+
+def _in_any(t: time, windows) -> bool:
+    return any(start <= t < end for start, end in windows)
+
+
+def rate_at(dt: datetime) -> Tuple[float, str]:
+    """Return (usd_per_kwh, period_label) for a local datetime.
+
+    Periods, in precedence order: on-peak (16:00-21:00 daily), then super
+    off-peak, then off-peak as the remainder. Windows are inclusive of start
+    and exclusive of end, so 21:00 is off-peak rather than on-peak.
     """
-    if ON_PEAK_START <= dt.time() < ON_PEAK_END:
-        return ON_PEAK_USD_PER_KWH, "on_peak"
-    return OFF_PEAK_USD_PER_KWH, "off_peak"
+    rates = TARIFF["seasons"][season_of(dt)]
+    clock = dt.time()
+
+    if ON_PEAK_START <= clock < ON_PEAK_END:
+        return rates["on_peak"], "on_peak"
+
+    weekend = dt.weekday() >= 5
+    windows = SUPER_OFF_PEAK_WEEKEND if weekend else SUPER_OFF_PEAK_WEEKDAY
+    if _in_any(clock, windows):
+        return rates["super_off_peak"], "super_off_peak"
+
+    return rates["off_peak"], "off_peak"
+
+
+def cheapest_rate(dt: datetime) -> Tuple[float, str]:
+    """The best rate available on the same day — the target for shifting.
+
+    A deferral recommendation is only honest if it names what the load would be
+    shifted TO. Super off-peak exists every day, so that is the floor.
+    """
+    rates = TARIFF["seasons"][season_of(dt)]
+    return rates["super_off_peak"], "super_off_peak"
+
+
+def tariff_provenance() -> str:
+    """One line naming the schedule and when it took effect."""
+    return (f"SDG&E Schedule {TARIFF.get('schedule', '?')}, "
+            f"effective {TARIFF.get('effective_date', '?')}")
 
 
 # --------------------------------------------------------------------------

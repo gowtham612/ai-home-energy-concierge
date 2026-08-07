@@ -80,6 +80,27 @@
  * switches the real device -> CMD comes back -> LED. */
 #define BUTTON_ACTUATION 1
 
+/* Readiness indicator on the Buttons LEDs.
+ *
+ * The MCU cannot see the network — Wi-Fi lives on the Linux side — so the
+ * publisher tells it, via `NET <ssid> <mqtt> <kasa>` on the same return channel
+ * that carries CMD.
+ *
+ * Encodes READINESS, not just SSID, because SSID alone would not have caught
+ * the failure that motivated this: after a power cycle the board had the right
+ * Wi-Fi configuration and was still completely dead — wlan0 never associated,
+ * the publisher was not running, and the pinned Kasa addresses had gone stale
+ * with a subnet change. Four independent faults, none visible from the board.
+ *
+ *   dark            publisher not running — nothing is driving anything
+ *   1 blink         on ArtiFi
+ *   2 blinks        on HaQathon
+ *   3 blinks        on some other network
+ *   rapid flutter   associated with nothing
+ *   LED2 solid      degraded: MQTT down or no Kasa device bound
+ */
+#define NET_STATUS_LED 1
+
 #include <Arduino_Modulino.h>
 
 /* ------------------------------------------------------------------ *
@@ -166,11 +187,37 @@ bool lightsOn = false, acOn = false;
  * immune to a dropped line (the count still climbs) and to a repeated one (no
  * change, no action) — neither of which an edge flag would survive. They wrap
  * at 65535 harmlessly: the consumer compares for inequality, not magnitude. */
-uint16_t btnLights = 0, btnAc = 0;
+/* One counter per button. Named b1/b2/b3 for the BUTTON, not for a load: they
+   used to be btnLights/btnAc because A and B toggled the bulb and the plug
+   directly. They now drive SIMULATOR state instead (presence, ambient light,
+   reset), so a load-shaped name would be actively misleading. */
+uint16_t btn1 = 0, btn2 = 0, btn3 = 0;
 
 /* millis() of a press still awaiting its CMD confirmation; 0 = nothing pending. */
-unsigned long pendLights = 0, pendAc = 0;
+unsigned long pend1 = 0, pend2 = 0, pend3 = 0;
 bool lastActionFailed = false;
+
+#if NET_STATUS_LED
+/* Readiness state, pushed from Linux. See the NET_STATUS_LED note above. */
+uint8_t  netCode      = 0;      /* 0 none · 1 ArtiFi · 2 HaQathon · 3 other   */
+bool     netDegraded  = false;  /* MQTT down or no Kasa device bound          */
+unsigned long lastNetMsg = 0;   /* 0 = never heard from the publisher         */
+
+/* Blink sequence state. A state machine, not delay() — the 20 ms button poll
+   and the 1 Hz telemetry both have to keep running while this animates. */
+unsigned long netSeqStart = 0;  /* when the current REST period began         */
+int      netStep     = -1;      /* -1 = resting, else index into the sequence */
+unsigned long netStepAt = 0;
+
+const unsigned long NET_PERIOD_MS   = 10000;  /* show it this often          */
+const unsigned long NET_ON_MS       = 170;
+const unsigned long NET_OFF_MS      = 230;
+const unsigned long NET_FLUTTER_MS  = 90;     /* "no network" is visibly fast */
+const int           NET_FLUTTER_N   = 6;
+/* If the publisher stops, its NET messages stop. Going dark after this is the
+   signal — it is exactly the case that looked identical to "working" before. */
+const unsigned long NET_STALE_MS    = 40000;
+#endif
 
 /* How long to wait for the Linux side to confirm before calling it a failure.
  *
@@ -402,14 +449,20 @@ void pollButtons(unsigned long now) {
       stable[i] = now3[i];
       if (stable[i]) {                       // confirmed rising edge
 #if BUTTON_ACTUATION
+        /* A = presence AWAY · B = ambient light across the threshold ·
+           C = reset to the demo's steady state. None of these switch a device
+           from here; the publisher turns the counter into a simulator cue, so
+           the on-screen control moves rather than the hub changing behind it. */
         if (i == 0) {
-          btnLights++; pendLights = now ? now : 1;
-          lastActionFailed = false; chirp(660);   // "press taken, awaiting device"
+          btn1++; pend1 = now ? now : 1;
+          lastActionFailed = false; chirp(660);
         } else if (i == 1) {
-          btnAc++;     pendAc     = now ? now : 1;
+          btn2++; pend2 = now ? now : 1;
           lastActionFailed = false; chirp(660);
         } else {
-          discoverNodes(); chirp(880);
+          btn3++; pend3 = now ? now : 1;
+          lastActionFailed = false; chirp(880);
+          discoverNodes();          /* C also re-scans, as it always did */
         }
 #else
         if (i == 0)      { occForce = !occForce; chirp(occForce ? 880 : 440); }
@@ -421,7 +474,9 @@ void pollButtons(unsigned long now) {
     pending[i] = now3[i];
   }
 
-#if BUTTON_ACTUATION
+#if NET_STATUS_LED
+  updateLeds(now);
+#elif BUTTON_ACTUATION
   /* Confirmed device state, not requested state — see handleCommand(). */
   buttons.setLeds(lightsOn, acOn, lastActionFailed);
 #else
@@ -429,6 +484,64 @@ void pollButtons(unsigned long now) {
 #endif
 #endif
 }
+
+
+#if NET_STATUS_LED
+/* Single owner of the three LEDs.
+ *
+ * Two things want them: the load mirror (which bulb/plug is confirmed on) and
+ * the readiness blink. Rather than have both call setLeds() and fight — which
+ * would show whichever ran last, at 50 Hz — everything routes through here.
+ *
+ * Resting state is the load mirror, so the button feedback that already works
+ * is unchanged between blinks. The sequence borrows the LEDs briefly, then
+ * hands them straight back.
+ */
+void updateLeds(unsigned long now) {
+#if USE_BUTTONS
+  if (!haveButtons) return;
+
+  /* No word from the publisher for NET_STALE_MS: it is not running, or it can
+     no longer reach us. Go dark and stay dark — a board that looks unpowered is
+     the correct signal here, and it is the case that used to be invisible. */
+  bool stale = (lastNetMsg == 0) || ((now - lastNetMsg) > NET_STALE_MS);
+  if (stale) {
+    buttons.setLeds(false, false, false);
+    netStep = -1;
+    return;
+  }
+
+  int blinks    = (netCode == 0) ? NET_FLUTTER_N : netCode;
+  unsigned long onMs  = (netCode == 0) ? NET_FLUTTER_MS : NET_ON_MS;
+  unsigned long offMs = (netCode == 0) ? NET_FLUTTER_MS : NET_OFF_MS;
+
+  if (netStep < 0) {
+    /* Resting: show the load mirror, plus the degraded flag on LED2 so a
+       half-working board is distinguishable from a healthy one at a glance. */
+    buttons.setLeds(lightsOn, acOn, lastActionFailed || netDegraded);
+    if ((now - netSeqStart) >= NET_PERIOD_MS) {
+      netStep = 0;
+      netStepAt = now;
+    }
+    return;
+  }
+
+  /* Animating: even steps lit, odd steps dark. */
+  bool lit = ((netStep % 2) == 0);
+  unsigned long dwell = lit ? onMs : offMs;
+  buttons.setLeds(lit, lit, lit);
+
+  if ((now - netStepAt) >= dwell) {
+    netStep++;
+    netStepAt = now;
+    if (netStep >= blinks * 2) {      /* sequence finished — hand the LEDs back */
+      netStep = -1;
+      netSeqStart = now;
+    }
+  }
+#endif
+}
+#endif
 
 void pollKnobButton() {
 #if USE_KNOB
@@ -492,14 +605,97 @@ void handleCommand(char *line) {
     if (which == NULL) return;
     unsigned long now = millis();
     if (which[0] == 'a' || which[0] == 'A') {
-      btnLights++; pendLights = now ? now : 1;
+      btn1++; pend1 = now ? now : 1;
       lastActionFailed = false; chirp(660);
-      Serial.println(F("{\"ack\":\"simbtn\",\"button\":\"a\",\"load\":\"lights\"}"));
+      Serial.println(F("{\"ack\":\"simbtn\",\"button\":\"a\",\"does\":\"presence_away\"}"));
     } else if (which[0] == 'b' || which[0] == 'B') {
-      btnAc++;     pendAc     = now ? now : 1;
+      btn2++; pend2 = now ? now : 1;
       lastActionFailed = false; chirp(660);
-      Serial.println(F("{\"ack\":\"simbtn\",\"button\":\"b\",\"load\":\"ac\"}"));
+      Serial.println(F("{\"ack\":\"simbtn\",\"button\":\"b\",\"does\":\"ambient_light\"}"));
+    } else if (which[0] == 'c' || which[0] == 'C') {
+      btn3++; pend3 = now ? now : 1;
+      lastActionFailed = false; chirp(880);
+      Serial.println(F("{\"ack\":\"simbtn\",\"button\":\"c\",\"does\":\"reset_steady_state\"}"));
     }
+    return;
+  }
+#endif
+
+#if BUTTON_ACTUATION
+  /* `BTNACK <1|2|3> <ok|fail>` — the publisher confirming it carried out the
+     action a press asked for. Buttons no longer switch a load, so a CMD about a
+     bulb cannot serve as their acknowledgement; without this every press would
+     sit pending and buzz at ACK_TIMEOUT_MS even when it worked. */
+  if (strcmp(verb, "BTNACK") == 0) {
+    char *which = strtok(NULL, " 	");
+    char *okTok = strtok(NULL, " 	");
+    if (which == NULL) return;
+    bool failed = (okTok != NULL && strcmp(okTok, "fail") == 0);
+    switch (which[0]) {
+      case '1': pend1 = 0; break;
+      case '2': pend2 = 0; break;
+      case '3': pend3 = 0; break;
+      default: return;
+    }
+    lastActionFailed = failed;
+    chirp(failed ? 196 : 440);
+    return;
+  }
+#endif
+
+#if USE_KNOB
+  /* `SIMKNOB [comfy|hot]` — a simulated knob press, for the autonomous demo.
+   *
+   * Drives the SAME knob.set() the physical press drives, so temp_c changes the
+   * only way it ever changes: the encoder moves, and the next telemetry line
+   * carries the new value. Nothing here writes temp_c directly — if it did, the
+   * script could "prove" the R7 refusal while the knob path was broken.
+   *
+   * With no argument it toggles, exactly like the press. With an explicit
+   * target the demo can drive the refusal beat deterministically instead of
+   * depending on which side of the midpoint the dial happens to be. */
+  if (strcmp(verb, "SIMKNOB") == 0) {
+    char *want = strtok(NULL, " \t");
+    float target;
+    if (want != NULL && (want[0] == 'h' || want[0] == 'H')) {
+      target = PRESET_HOT_C;
+    } else if (want != NULL && (want[0] == 'c' || want[0] == 'C')) {
+      target = PRESET_COMFY_C;
+    } else {
+      target = (tempC > (PRESET_COMFY_C + PRESET_HOT_C) / 2.0)
+                 ? PRESET_COMFY_C : PRESET_HOT_C;
+    }
+    if (haveKnob) {
+      knob.set((int16_t)(((target - TEMP_MIN_C) * KNOB_COUNTS_FULL)
+                         / (TEMP_MAX_C - TEMP_MIN_C)));
+      chirp(880);
+    }
+    Serial.print(F("{\"ack\":\"simknob\",\"target_c\":"));
+    Serial.print(target, 1);
+    Serial.println(F("}"));
+    return;
+  }
+#endif
+
+#if NET_STATUS_LED
+  /* `NET <ssid> <mqtt> <kasa>` — readiness push from the Linux side.
+   *
+   * Arrives on a timer, not only on change: the ABSENCE of it is meaningful.
+   * lastNetMsg is what tells updateLeds() the publisher is still alive, so a
+   * process that dies takes the LEDs dark with it rather than freezing them on
+   * a stale-but-plausible pattern. */
+  if (strcmp(verb, "NET") == 0) {
+    char *ssid = strtok(NULL, " \t");
+    char *mq   = strtok(NULL, " \t");
+    char *ks   = strtok(NULL, " \t");
+    if (ssid == NULL) return;
+    int code = atoi(ssid);
+    netCode = (code < 0 || code > 3) ? 3 : (uint8_t)code;
+    bool mqttOk = (mq == NULL) || (atoi(mq) != 0);
+    bool kasaOk = (ks == NULL) || (atoi(ks) != 0);
+    netDegraded = !(mqttOk && kasaOk);
+    lastNetMsg = millis();
+    if (lastNetMsg == 0) lastNetMsg = 1;   /* 0 means "never heard" */
     return;
   }
 #endif
@@ -517,12 +713,12 @@ void handleCommand(char *line) {
   if (strcmp(load, "lights") == 0) {
     if (!failed) lightsOn = turnOn;
 #if BUTTON_ACTUATION
-    pendLights = 0;
+    pend1 = 0;
 #endif
   } else if (strcmp(load, "ac") == 0) {
     if (!failed) acOn = turnOn;
 #if BUTTON_ACTUATION
-    pendAc = 0;
+    pend2 = 0;
 #endif
   } else {
     known = false;
@@ -596,12 +792,9 @@ void loop() {
   /* A press the Linux side never answered for. Either the publisher is not
      running, or host->MCU serial does not reach us (Risk V-2). Say so with the
      error LED rather than leaving the operator watching a dead button. */
-  if (pendLights && (now - pendLights) > ACK_TIMEOUT_MS) {
-    pendLights = 0; lastActionFailed = true; chirp(196);
-  }
-  if (pendAc && (now - pendAc) > ACK_TIMEOUT_MS) {
-    pendAc = 0; lastActionFailed = true; chirp(196);
-  }
+  if (pend1 && (now - pend1) > ACK_TIMEOUT_MS) { pend1 = 0; lastActionFailed = true; chirp(196); }
+  if (pend2 && (now - pend2) > ACK_TIMEOUT_MS) { pend2 = 0; lastActionFailed = true; chirp(196); }
+  if (pend3 && (now - pend3) > ACK_TIMEOUT_MS) { pend3 = 0; lastActionFailed = true; chirp(196); }
 #endif
 
   if (now - lastSample < SAMPLE_MS) return;   // non-blocking; no delay() anywhere
@@ -646,8 +839,19 @@ void loop() {
 #if BUTTON_ACTUATION
   /* Press counters, not events: the publisher acts on the delta since the last
      line it saw, so a dropped line loses nothing and a duplicate does nothing. */
-  Serial.print(F(",\"bl\":"));           Serial.print(btnLights);
-  Serial.print(F(",\"ba\":"));           Serial.print(btnAc);
+  Serial.print(F(",\"b1\":"));           Serial.print(btn1);
+  Serial.print(F(",\"b2\":"));           Serial.print(btn2);
+  Serial.print(F(",\"b3\":"));           Serial.print(btn3);
+#endif
+#if NET_STATUS_LED
+  /* Echo back what the readiness LEDs are currently showing. The LEDs are the
+     point, but nothing off-board can SEE them — without this the feature is
+     unverifiable except by eye, and every other claim in this project is
+     checkable. Now a test can assert the MCU received and parsed the push. */
+  Serial.print(F(",\"net\":"));          Serial.print(netCode);
+  Serial.print(F(",\"net_deg\":"));      Serial.print(netDegraded ? 1 : 0);
+  Serial.print(F(",\"net_age_ms\":"));
+  Serial.print(lastNetMsg == 0 ? -1L : (long)(millis() - lastNetMsg));
 #endif
   Serial.print(F(",\"nodes\":"));        printNodes();
   Serial.println(F("}"));

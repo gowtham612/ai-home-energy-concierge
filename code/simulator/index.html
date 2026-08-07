@@ -681,9 +681,29 @@
     setTimeout(function(){ el.style.boxShadow = prev || ""; }, 900);
   }
 
+  // When the Modulino Knob owns temperature, the slider here should FOLLOW it —
+  // turning the physical dial should move the on-screen control, not leave the
+  // two disagreeing. Only mirrors when temp_src says the knob is the source, so
+  // the slider still works normally when nothing is driving it, and this never
+  // posts (the MCU already publishes at 1 Hz; echoing it back would fight).
+  function mirrorKnobTemp(s){
+    var rm = (s.rooms || {})[ROOM] || {};
+    if(rm.temp_src !== "knob_sim" || rm.temp_c == null) return;
+    var t = +rm.temp_c;
+    if(Math.abs((sim.temp_c || 0) - t) < 0.05) return;
+    sim.temp_c = t;
+    var el = $("temp"); if(el) el.value = t;
+    var lab = $("tempVal");
+    if(lab){
+      lab.textContent = t.toFixed(1) + " °C";
+      lab.classList.toggle("hot", t > 27);
+    }
+  }
+
   function renderState(s){
     if(!s || typeof s !== "object") return;
     applyDemoCue(s.demo_cue);
+    mirrorKnobTemp(s);
 
     var sig = stateSig(s);
     if(sig === lastSig) return;    // nothing we draw has changed
