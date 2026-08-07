@@ -2044,3 +2044,55 @@ presenting is "these props stand in for a real A/C and a room of lights; the met
 readings are real, the magnitudes are scaled to a real household's from the utility
 data". Do not describe them as measured household load.
 
+
+---
+
+# 26. External device changes were up to 30 s stale (2026-08-07)
+
+Switching the heater off **by hand** left the dashboard showing it drawing for ~15 s.
+Not a UI bug: `KASA_POLL_S=30`, and polling is the **only** way an externally-made change
+is noticed. TP-Link pushes nothing, so the poll interval *is* the staleness — up to 30 s,
+averaging 15.
+
+Commands the hub issues were never affected: those read state back immediately (0.6 s
+cue-to-switch, §21.11). Only changes made at the wall, on the device, or from the
+TP-Link app had to wait.
+
+## 26.1 Why it was 30 s, and why that reasoning is load-specific
+
+30 s exists because 5 s made the **bulb flicker** — TP-Link firmware serves one
+connection at a time, so a frequent poll collides with commands and the KL120 visibly
+stutters.
+
+That is an argument about a **light**. The HS110 plug emits nothing, so polling it fast
+costs nothing to look at. The single global interval was forcing the plug to inherit a
+constraint that only applies to the bulb.
+
+## 26.2 Per-load intervals
+
+`KASA_POLL_OVERRIDES`, falling back to `KASA_POLL_S`:
+
+| Load | Interval | Why |
+|---|---|---|
+| `ac` (HS110 plug) | **4 s** (`KASA_POLL_S_AC`) | no light to flicker |
+| `lights` (KL120 bulb) | **30 s** (`KASA_POLL_S_LIGHTS`) | unchanged — this is the flicker-safe cadence |
+
+`KasaBank.poll(only=[...])` polls just the loads that are due, so the fast device does not
+drag the others onto its cadence.
+
+## 26.3 Measured
+
+```
+heater switched OFF externally -> hub saw it at t+2.0s
+heater switched back ON        -> hub saw it at t+4.6s
+```
+
+Was up to 30 s. `KASA_POLL_S_AC=4` added to `board.env`.
+
+## 26.4 One cosmetic artifact
+
+A poll landing mid-spin-down once reported `state=off` with 1077 W scaled (18.2 W
+measured) — the fan had not stopped yet. It is a real reading, corrects on the next poll
+4 s later, and never reaches `total_watts`, which sums only loads whose state is `on`.
+Left alone rather than clamped, because clamping would hide a genuine measurement.
+

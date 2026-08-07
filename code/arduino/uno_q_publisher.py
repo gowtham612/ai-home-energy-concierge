@@ -108,6 +108,26 @@ KASA_SETTLE_S = float(os.environ.get("KASA_SETTLE_S", "0.4"))
 # demo does anything. Lower it only if you need fast detection of changes
 # made outside this system.
 KASA_POLL_S = float(os.environ.get("KASA_POLL_S", "30"))
+
+# Per-load poll intervals, falling back to KASA_POLL_S.
+#
+# 30 s is here because 5 s made the BULB flicker: TP-Link firmware serves one
+# connection at a time, so a frequent poll collides with commands and the KL120
+# visibly stutters. That reasoning is specific to a light. The HS110 plug emits
+# nothing, so polling it fast costs nothing to look at.
+#
+# It matters because polling is the only way an EXTERNAL change is seen. Switch
+# the heater off at the wall and the dashboard keeps showing it drawing until
+# the next poll — up to 30 s, averaging 15 s, which reads as a frozen UI.
+# Commands issued by the hub are unaffected: those read state back immediately.
+KASA_POLL_OVERRIDES = {
+    "ac": float(os.environ.get("KASA_POLL_S_AC", "4")),
+    "lights": float(os.environ.get("KASA_POLL_S_LIGHTS", str(KASA_POLL_S))),
+}
+
+
+def _poll_interval(load: str) -> float:
+    return KASA_POLL_OVERRIDES.get(load, KASA_POLL_S)
 # TP-Link firmware serves ONE connection at a time, so a concurrent reader (the
 # Kasa phone app, another script) can make a write raise even though it landed.
 # Retry, and judge success by reading the device back — see KasaBank.switch().
@@ -736,14 +756,22 @@ class KasaBank:
         ok, source, _watts = self.switch(load, want)
         return bool(ok), want, source
 
-    def poll(self) -> Dict[str, Dict]:
-        """Current state + measured power for every bound load."""
+    def poll(self, only: Optional[list] = None) -> Dict[str, Dict]:
+        """Current state + measured power for bound loads.
+
+        `only` restricts the poll to named loads, so a device that can afford a
+        fast cadence does not drag the others onto it. Polling is the ONLY way an
+        externally-made change is noticed — switching a device off at the wall or
+        from the TP-Link app pushes nothing — so the interval is the staleness.
+        """
         if not self.enabled or not self.devices:
             return {}
 
         async def go():
             out = {}
             for load, dev in self.devices.items():
+                if only is not None and load not in only:
+                    continue
                 try:
                     await dev.update()
                     entry = {"state": "on" if dev.is_on else "off",
@@ -1124,6 +1152,9 @@ def main():
     parsed_n = dropped_n = 0
     last_loads: Dict[str, str] = {}
     last_kasa_poll = 0.0
+    # Per-load, so the plug can run a fast cadence without dragging the bulb
+    # onto one. See KASA_POLL_OVERRIDES.
+    last_kasa_poll_at: Dict[str, float] = {}
     # Most recent Kasa read-back, so the edge scorer can see what is actually
     # drawing power. Sensors alone cannot tell an anomaly from a quiet evening.
     last_kasa_info: Dict[str, Dict] = {}
@@ -1236,10 +1267,15 @@ def main():
             # Ground truth beats the modelled table: if someone switches the lamp
             # by hand, the hub still sees it, and metered loads report the watts
             # they are genuinely drawing.
-            if bank.devices and (now - last_kasa_poll) >= KASA_POLL_S:
+            due = [n for n in bank.devices
+                   if (now - last_kasa_poll_at.get(n, 0.0)) >= _poll_interval(n)]
+            if bank.devices and due:
+                for n in due:
+                    last_kasa_poll_at[n] = now
                 last_kasa_poll = now
-                last_kasa_info = bank.poll()
-                for name, info in last_kasa_info.items():
+                polled = bank.poll(only=due)
+                last_kasa_info.update(polled)
+                for name, info in polled.items():
                     state = info["state"]
                     watts = info.get("watts")
                     changed = last_loads.get(name) != state
