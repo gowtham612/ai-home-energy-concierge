@@ -1891,3 +1891,43 @@ adb -s 3933751369 shell "pkill -f uno_q_publisher.py"   # then run smoke_test.py
 
 With the publisher paused: **32/32**.
 
+
+---
+
+# 23. Autonomy is granted per-detector, not just per-load (2026-08-07)
+
+Authored in a parallel session that died before committing; recovered from the working
+tree and committed unchanged. It had never been in any commit on any branch, so a
+checkout would have destroyed it.
+
+## 23.1 The bug
+
+With `AI_AUTO_LIGHTS=1`, the bulb switched itself off during **beat 1 steady state** -
+home, occupied, lights and A/C on - seconds after button C's reset settled, with nobody
+having pressed A.
+
+The cause is not a threshold. The edge classifier's two heaviest positive weights are
+`hvac_on` (+3.48) and `lights_on` (+2.36) against `occupancy` at only -3.78, so past
+about 22:00 the clock terms tip an ordinary occupied evening over `ANOMALY_THRESHOLD`:
+**0.83 at 23:00, 0.97 at 03:00**. The learned finding then attached to whichever load was
+heaviest via `_biggest_live_load`, and when that was the bulb, it actuated.
+
+The model is behaving exactly as trained - this is its motivating case
+(`anomaly.py:240`, "3 AM, A/C running, someone home"), the scenario the whole edge tier
+exists to catch. Lowering the threshold to stop it would break the thing it is for.
+
+## 23.2 The fix
+
+Auto-actuation is now restricted to `unoccupied_lights_on` - R1, a deterministic rule.
+
+Autonomy was already granted per-LOAD by risk: lights only, never anything
+comfort-affecting. It should equally be granted per-DETECTOR by confidence. **A rule that
+fired is a fact; a score of 0.83 is an opinion**, and an opinion belongs on the dashboard
+where a human can weigh it.
+
+The learned finding is unaffected in every other respect: it still surfaces, still carries
+its anomaly score and provenance, still gets narrated, and can still be approved by a
+person. It simply cannot move a switch by itself.
+
+Beat 2 is unchanged - it demonstrates R1, which is exactly the rule still permitted to act.
+

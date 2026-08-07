@@ -441,6 +441,32 @@ def evaluation_tick() -> List[Recommendation]:
     if (os.environ.get("AI_AUTO_LIGHTS", "0") == "1"
             and time.time() - LAST_RESET_AT > RESET_SETTLE_S):
         for f in findings:
+            # DETERMINISTIC rules only. The learned tier detects, it does not act.
+            #
+            # The edge classifier scores the whole home state, and its two
+            # heaviest positive weights are hvac_on (+3.48) and lights_on
+            # (+2.36) against occupancy at only -3.78. Past ~22:00 the clock
+            # terms tip the sum over ANOMALY_THRESHOLD for the ordinary beat-1
+            # steady state -- home, occupied, lights + A/C on -- which scores
+            # 0.83 at 23:00 and 0.97 at 03:00. It then attached to whichever
+            # load was heaviest (_biggest_live_load) and, when that happened to
+            # be the bulb, switched off the scene button C had just set up,
+            # seconds after the reset settled and with nobody having pressed A.
+            #
+            # That is the model behaving as trained -- this IS its motivating
+            # case (anomaly.py:240) -- so the threshold is not the thing to
+            # change. What is wrong is granting a LEARNED score the authority to
+            # actuate. Autonomy here is granted per-load by risk (see below);
+            # it should equally be granted per-DETECTOR by confidence. A rule
+            # that fired is a fact, and R1 is the one beat 2 demonstrates. A
+            # score of 0.83 is an opinion, and an opinion belongs on the
+            # dashboard where a human can weigh it.
+            #
+            # The learned finding is unaffected: it still surfaces, still
+            # carries its score and provenance, still gets narrated. It just
+            # cannot move a switch by itself.
+            if f.rule_name != "unoccupied_lights_on":
+                continue
             if f.load_key.rsplit("/", 1)[-1] != "lights":
                 continue
             # Dedupe by LOAD, not by finding id. R1 (unoccupied) and R3
