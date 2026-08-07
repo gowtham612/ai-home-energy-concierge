@@ -151,6 +151,19 @@
     font-size: 11px; font-weight: 600; color: var(--good);
     display: inline-flex; align-items: center; gap: 4px;
   }
+  .refused-actions { margin-top: 10px; display: flex; gap: 8px; }
+  /* Red, and deliberately not the primary colour. Overruling a comfort
+     guardrail should never be the easiest thing on the card. */
+  .btn-override {
+    background: #7f1d1d; color: #fee2e2; border: 1px solid #b91c1c;
+    border-radius: 7px; padding: 7px 12px; font-size: 12px; font-weight: 600;
+    cursor: pointer;
+  }
+  .btn-override:hover { background: #991b1b; }
+  .btn-keep {
+    background: transparent; color: #9aa0aa; border: 1px solid #39404b;
+    border-radius: 7px; padding: 7px 12px; font-size: 12px; cursor: pointer;
+  }
   .refused {
     margin-top: 8px; font-size: 11px; color: var(--warning);
     border-left: 2px solid var(--warning); padding: 4px 0 4px 8px;
@@ -620,7 +633,7 @@ function drawRecos(recos) {
 }
 
 /* Approve a recommendation -> hub commands the UNO Q -> servo/relay acts. */
-async function applyReco(recoId, btn) {
+async function applyReco(recoId, btn, isOverride = false) {
   const old = btn.textContent;
   btn.disabled = true;
   btn.textContent = "Actuating…";
@@ -630,12 +643,37 @@ async function applyReco(recoId, btn) {
   try {
     const r = await fetch("/api/apply", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ reco_id: recoId, action: "off", approved_by: "dashboard" })
+      body: JSON.stringify({ reco_id: recoId, action: "off",
+                             approved_by: "dashboard", override: isOverride })
     });
     const j = await r.json();
     if (r.status === 409 && note) {
       // The comfort guardrail refused to act. This is a feature, not an error.
-      note.textContent = "⚠ " + (j.reason ?? "Refused by the comfort guardrail.");
+      //
+      // The override is offered HERE, after a refusal and next to the reason
+      // for it, rather than as a permanent control. A red button that appears
+      // only when the system has just said no is a considered decision; the
+      // same button sitting on every card all the time is merely a second way
+      // to press Approve.
+      note.innerHTML = "";
+      const why = document.createElement("div");
+      why.textContent = "⚠ " + (j.reason ?? "Refused by the comfort guardrail.");
+      note.appendChild(why);
+      if (j.override_available && !isOverride) {
+        const row = document.createElement("div");
+        row.className = "refused-actions";
+        const ov = document.createElement("button");
+        ov.className = "btn-override";
+        ov.textContent = "Override anyway";
+        ov.title = "Act despite the comfort guardrail. Recorded as a human override.";
+        ov.onclick = () => applyReco(recoId, btn, true);
+        const keep = document.createElement("button");
+        keep.className = "btn-keep";
+        keep.textContent = "Keep me comfortable";
+        keep.onclick = () => { note.style.display = "none"; };
+        row.appendChild(ov); row.appendChild(keep);
+        note.appendChild(row);
+      }
       note.style.display = "block";
       btn.disabled = false;
       btn.textContent = old;

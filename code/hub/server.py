@@ -142,6 +142,9 @@ class StateStore:
         # Tier-2 plan, when AI_PLAN=1. Empty dict = no plan this cycle,
         # which the UI renders as the plain ranked list it always had.
         self.plan: Dict = {}
+        # Last guardrail refusal, and whether a person overrode it. Read by
+        # /ask so "why did you refuse?" answers from what actually happened.
+        self.last_refusal: Dict = {}
         # Autonomous-demo cue. The autopilot posts a control change here and the
         # simulator page applies it to its OWN widget, so a scripted run drives the
         # visible UI rather than quietly POSTing behind it. Monotonic id: the page
@@ -310,6 +313,7 @@ class StateStore:
         rate, period = _rate(now_dt)
         return {
             **snap,
+            "last_refusal": self.last_refusal,
             "total_watts": self.total_watts(),
             "power_history": list(self.power_history),
             "tariff": {"rate": rate, "period": period,
@@ -1049,14 +1053,37 @@ async def api_apply(body: Dict):
     snap = STORE.snapshot()
     now_dt = datetime.fromtimestamp(snap["now"])
     allowed, reason = _guardrail_allows(snap, rec, load_key, action, now_dt)
-    if not allowed:
+    override = bool(body.get("override"))
+    if not allowed and not override:
         print(f"[apply] REFUSED {load_key} -> {action}: {reason}")
         return JSONResponse({"ok": False, "refused": True, "reason": reason,
-                             "gate": "comfort_guardrail"}, status_code=409)
+                             "gate": "comfort_guardrail",
+                             # Tell the caller the door exists. The UI renders
+                             # this as a second, deliberately unfriendly button.
+                             "override_available": True,
+                             "override_hint": "resend with override:true to act anyway"},
+                            status_code=409)
+    if not allowed and override:
+        # A person overruled the guardrail. This is allowed — R7 protects the
+        # occupant's comfort, and the occupant is entitled to decide they would
+        # rather have the saving. What is NOT allowed is doing it quietly: the
+        # refusal that was overridden is recorded verbatim, the action is booked
+        # as approved_by="human_override" rather than plain approval, and it is
+        # never available to the autonomous path, which has no one to be
+        # accountable for it.
+        print(f"[apply] OVERRIDE {load_key} -> {action}: user overruled — {reason}")
+        STORE.last_refusal = {"load_key": load_key, "reason": reason,
+                              "overridden": True, "ts": time.time()}
 
     # --- publish the command --------------------------------------------------
+    # "human_override" is a distinct actor from "user". A saving taken by
+    # overruling the comfort guardrail is not the same event as one the system
+    # was happy to make, and the audit trail must not flatten the two.
+    approver = body.get("approved_by", "user")
+    if not allowed and override:
+        approver = "human_override"
     command = {"action": action, "reco_id": reco_id,
-               "approved_by": body.get("approved_by", "user"), "ts": time.time()}
+               "approved_by": approver, "ts": time.time()}
     published = False
     if MQTT_CLIENT is not None:
         try:

@@ -2264,3 +2264,70 @@ arithmetic verified while the conclusion did not.
 word boundary should have been. It compiled, imported and returned None for every input.
 Visible only via `cat -A`. Write regexes with the Edit tool, not a heredoc.
 
+
+---
+
+# 29. Override on a refusal, and the state of board-to-simulator sync (2026-08-07)
+
+## 29.1 Override (red) beside Approve (blue)
+
+A refusal that cannot be overruled is a system deciding for the occupant. R7 protects
+*their* comfort, so they are entitled to decide they would rather have the saving. What
+must not happen is doing it quietly.
+
+`POST /api/apply` now takes `override: true`. Behaviour:
+
+| Request | Result |
+|---|---|
+| approve, guardrail happy | 200, `approved_by: "user"` |
+| approve, guardrail refuses | **409** + `override_available: true` + a hint |
+| approve with `override: true` | **200**, `approved_by: **"human_override"**` |
+
+Three things keep it honest:
+
+- **`human_override` is a distinct actor** from `user` in the command and the audit
+  trail. A saving taken by overruling the comfort gate is not the same event as one the
+  system was happy to make, and the record must not flatten them.
+- **The refusal is preserved**, verbatim, in `STORE.last_refusal` with `overridden: true`
+  — so "why did you refuse?" can still answer truthfully afterwards.
+- **The autonomous path cannot override.** `AI_AUTO_LIGHTS` still stops dead at the
+  gate; there is no one to be accountable for an override made by a loop.
+
+In the UI the red button appears **only after a refusal**, next to the reason, alongside
+a neutral "Keep me comfortable". It is deliberately not the primary colour and not a
+permanent control: a red button on every card at all times is just a second way to press
+Approve.
+
+Verified:
+
+```
+plain    -> 409 {"refused":true,"reason":"living is 29.4C, above the 27C comfort
+                 limit ...","override_available":true}
+override -> 200 {"approved_by":"human_override","realized_usd":3.0648,
+                 "published":true}
+```
+
+## 29.2 Board-to-simulator sync was already built — and works
+
+Checked each path rather than rebuilding:
+
+| Control | Path | Verified |
+|---|---|---|
+| Knob rotation | MCU telemetry `temp_c` + `temp_src="knob_sim"`; page runs `mirrorKnobTemp()` | ✅ |
+| Knob press | firmware toggles `PRESET_COMFY_C` 22.0 / `PRESET_HOT_C` 29.5 | ✅ 21.9 ↔ 29.4 |
+| Button B | `lux` cue, alternating | ✅ 60 ↔ 900 |
+| Button A | `presence` + `occupancy` cues | ✅ |
+| Button C | reset cues, bracketed | ✅ |
+
+The page applies these through `applyDemoCue` (presence, occupancy, lux, humidity —
+each with a visible flash) and `mirrorKnobTemp` for temperature, which deliberately only
+follows when `temp_src` says the knob is the source, so a real sensor could never be
+overwritten by the mirror.
+
+`temp_c` cues are explicitly ignored by the page — the Knob owns temperature, and
+accepting a cue for it would let two sources fight over one slider.
+
+**If the page looks out of sync, suspect a stale tab before suspecting the wiring.** A
+simulator pane left open across a code change runs the old JavaScript; that has bitten
+this project before. Reload it.
+
