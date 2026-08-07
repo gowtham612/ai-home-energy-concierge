@@ -22,6 +22,7 @@ import time
 from collections import deque
 from datetime import datetime
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Dict, List, Optional
 
 import rules
@@ -590,6 +591,23 @@ def evaluation_tick() -> List[Recommendation]:
                     MQTT_CLIENT.publish(f"home/command/{f.load_key}", json.dumps(cmd))
                     print(f"[auto] {f.load_key} -> off  (rule {f.rule_name}, "
                           f"no human in the loop by design)")
+                    # Mark it DONE, or the card keeps offering Approve for an
+                    # action that already happened. Seen live: the lights went
+                    # off autonomously and the dashboard still asked whether to
+                    # turn them off — which reads as the system not knowing what
+                    # it just did, and undercuts the whole point of beat 2.
+                    #
+                    # book_realized() is what turns "could save" into "saved",
+                    # and it also puts the id in applied_ids, which is what stops
+                    # the narration loop re-offering it and flips the card to
+                    # "Applied - saving realized".
+                    est = getattr(f, "estimate", None)
+                    STORE.book_realized(SimpleNamespace(
+                        id=f.id, rule_name=f.rule_name, room=f.room,
+                        usd=f.usd,
+                        kwh=getattr(est, "kwh", 0.0) or 0.0,
+                        co2_kg=getattr(est, "co2_kg", 0.0) or 0.0,
+                        title=f.headline))
                 except Exception as exc:
                     print(f"[auto] publish failed: {exc}")
 

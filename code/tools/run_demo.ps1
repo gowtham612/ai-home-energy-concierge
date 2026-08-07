@@ -82,7 +82,7 @@ $askCode = try { (Invoke-WebRequest -Uri "$hub/ask" -UseBasicParsing -TimeoutSec
 # values, and a hub carrying shipping defaults makes beat 2 take ten MINUTES
 # while looking perfectly healthy. Ask the hub what it is actually running with.
 $WANT = @{ DEMO_GRACE_S = 1; DEMO_AWAY_GRACE_S = 1; AUTO_COOLDOWN_S = 3;
-           EVAL_INTERVAL_S = 1; RESET_SETTLE_S = 3 }
+           EVAL_INTERVAL_S = 1; RESET_SETTLE_S = 18 }
 $pacingOk = $false
 if ($askCode -eq 200) {
     try {
@@ -117,7 +117,12 @@ if ($askCode -ne 200 -or -not $pacingOk) {
     # is the failure this launcher exists to prevent.
     $env:DEMO_GRACE_S    = "1"; $env:DEMO_AWAY_GRACE_S = "1"
     $env:AUTO_COOLDOWN_S = "3"; $env:EVAL_INTERVAL_S   = "1"
-    $env:RESET_SETTLE_S  = "3"
+    # 18, not 3. Button C's reset switches BOTH Kasa devices and that takes about
+    # ten seconds. With a 3 s hold the window expired mid-reset, the unoccupied
+    # rule fired on the lights C had just turned on, and beat 1 could never be
+    # reached - the bulb went straight back off. Seen live, mid-demo. This must
+    # stay longer than the reset takes to complete.
+    $env:RESET_SETTLE_S  = "18"
     # Scale the demo props to the appliances they stand in for. The bulb and the
     # 33 W fan are physically real but two orders of magnitude below the
     # household in the history file, so unscaled they make every saving round to

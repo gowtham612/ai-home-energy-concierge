@@ -2441,3 +2441,61 @@ untouched -- verified both route where intended.
 
 The projection is also published into the digest and the allowed map, so the LLM path can
 cite it and it verifies there too.
+
+---
+
+# 32. Two bugs found live, mid-demo (2026-08-07)
+
+## 32.1 The dashboard asked permission for something it had already done
+
+Beat 2: the lights went off autonomously, and then a card appeared asking whether to turn
+the lights off. Then a second card for the A/C. It reads as a system that does not know
+what it just did, and it undercuts the entire point of the beat.
+
+The auto-act block published the command and set `AUTO_ACTED`, but never marked the
+finding applied. The narration loop only skips findings in `STORE.applied_ids`, so the
+finding was still narrated, and the dashboard renders an Approve button for any card
+whose id is not in `applied_ids`.
+
+**Fix:** on a successful autonomous publish, call `STORE.book_realized(...)`. That does
+both jobs — it moves the saving from "avoidable" to **realized**, and it puts the id in
+`applied_ids`, which stops the card being offered.
+
+Verified live: lights went off by themselves, **`realized = $0.67`** booked, no approval
+card.
+
+## 32.2 RESET_SETTLE_S was shorter than the reset itself
+
+Pressing C turned the lights on and then something turned them straight back off. The log
+is unambiguous:
+
+```
+[button] C: lights -> on ok=True source=kasa
+[uno_q]   load lights -> on (10.8W metered)
+[uno_q]   COMMAND lights -> off (reco r1-living-lights)
+```
+
+`RESET_SETTLE_S` was **3 s**, and button C's reset switches **both** Kasa devices, which
+takes about **ten seconds**. The hold expired while the reset was still running, so
+auto-actuation fired on the lights the reset had just turned on. Beat 1 could never be
+reached.
+
+This was self-inflicted: the value was 12 and was dropped to 3 during the beat-2 latency
+work (§21.11), where only `DEMO_GRACE_S` and `EVAL_INTERVAL_S` actually mattered.
+
+**Fix: 18 s**, in `run_demo.ps1` and in its own `$WANT` verifier so the launcher checks
+for the corrected value. The rule is simple and worth stating plainly: **the settle
+window must outlast the reset it is protecting.**
+
+## 32.3 Also seen
+
+- **Occupancy stuck False** after an earlier A press while presence read `home`. R1 keys
+  on occupancy alone, so it kept firing. Cleared by re-asserting occupancy; worth
+  checking `occ` and not just `presence` when beat 1 will not hold.
+- **The board rebooted twice** during setup. Each time: `adb reverse` gone,
+  `/tmp/publisher.log` gone, publisher dead. The missing log file remains the fastest
+  reboot tell.
+- **The Kasa devices moved subnet again**, 192.168.86.x to 192.168.137.x, while keeping
+  the same SSID name. The PC and the board were on two different networks both called
+  ArtiFi. MQTT was unaffected because it rides the USB tunnel; only the Kasa addresses
+  had to be re-pointed.
