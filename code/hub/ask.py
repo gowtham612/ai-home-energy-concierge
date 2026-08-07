@@ -32,6 +32,7 @@ except ImportError:
 
 import llm as llm_mod
 from cloud_report import build_digest
+from history_digest import build_history_digest
 
 AI_ASK = os.environ.get("AI_ASK", "0") == "1"
 
@@ -43,6 +44,7 @@ SUGGESTED_QUESTIONS = [
     "What should I do first?",
     "What if I shift the dryer to 9 PM?",
     "Is anything unusual right now?",     # exercises the tier-1 anomaly signal
+    "How does today compare to my usual month?",
 ]
 
 SYSTEM_PROMPT = """You answer questions about a home's live energy state.
@@ -52,6 +54,11 @@ You are given a DIGEST computed in Python. Every number you may use is in it.
 RULES:
 - Do NOT do arithmetic. Do NOT invent, restate differently, or round any number.
   Cite figures exactly as they appear in the digest, or omit them.
+- The digest has a LIVE section (right now) and a separate HISTORY section
+  (a past multi-day window). Never answer a question about current/live usage
+  with a HISTORY figure, or vice versa -- state which window a number is from.
+- HISTORY hvac/car_charging/lights_or_fan figures are INFERRED labels, not
+  measured per-circuit data. Say "inferred" or "estimated" when citing them.
 - If the digest does not contain what was asked, say so plainly. Do not guess.
 - Answer in at most 3 short sentences. Be direct and practical.
 - Plain prose. No markdown, no JSON, no preamble."""
@@ -98,6 +105,35 @@ def _digest_lines(state: Dict) -> Tuple[str, Dict[str, str]]:
     if tw is not None:
         allowed["total_watts"] = f"{tw}"
         lines.append(f"DRAWING NOW: {tw} W")
+
+    # 37 days of real utility data, disaggregated into inferred buckets by
+    # tools/history_disaggregate.py. Labeled HISTORY and NOT LIVE in the prompt
+    # itself, not just in this comment -- probed live, a model asked "what's my
+    # current usage?" will reach for the biggest number in the digest unless the
+    # window each figure covers is unambiguous at the point of citation.
+    hd = build_history_digest()
+    if hd:
+        for k in ("window_days", "total_kwh", "total_usd", "hvac_kwh", "hvac_usd",
+                  "hvac_hours_per_day", "hvac_on_peak_kwh", "hvac_on_peak_usd",
+                  "hvac_on_peak_pct_of_hvac", "hvac_onpeak_shift_monthly_usd",
+                  "car_charging_kwh", "car_charging_usd", "car_super_off_peak_pct",
+                  "lights_or_fan_kwh", "lights_or_fan_usd",
+                  "baseline_only_kwh", "baseline_only_usd"):
+            if hd.get(k) is not None:
+                allowed[f"history.{k}"] = f"{hd[k]}"
+        lines.append(
+            f"HISTORY (last {hd['window_days']} days, NOT live -- a separate window "
+            f"from DRAWING NOW above): total {hd['total_kwh']} kWh (${hd['total_usd']}). "
+            f"hvac (inferred) {hd['hvac_kwh']} kWh (${hd['hvac_usd']}), "
+            f"~{hd['hvac_hours_per_day']} h/day, {hd['hvac_on_peak_pct_of_hvac']}% of it "
+            f"on-peak (${hd['hvac_on_peak_usd']}); shifting that on-peak slice to "
+            f"super-off-peak would save ~${hd['hvac_onpeak_shift_monthly_usd']}/month. "
+            f"car_charging (inferred) {hd['car_charging_kwh']} kWh (${hd['car_charging_usd']}), "
+            f"{hd['car_super_off_peak_pct']}% already in the cheapest super-off-peak window. "
+            f"lights_or_fan (inferred) {hd['lights_or_fan_kwh']} kWh (${hd['lights_or_fan_usd']}). "
+            f"baseline/standby {hd['baseline_only_kwh']} kWh (${hd['baseline_only_usd']})."
+        )
+        lines.append(f"HISTORY CAVEAT: {hd['caveat']}")
 
     for name, room in (state.get("rooms") or {}).items():
         bits = []
@@ -193,6 +229,18 @@ def deterministic_answer(question: str, state: Dict) -> str:
     total_kwh = d.get("total_wasted_kwh", 0.0)
     recos = state.get("recos") or []
     q = (question or "").lower()
+
+    if (("usual" in q and "unusual" not in q) or "compare" in q
+            or "history" in q or "past month" in q):
+        hd = build_history_digest()
+        if hd:
+            return (f"Over the last {hd['window_days']} days: an estimated "
+                    f"{hd['hvac_kwh']} kWh on HVAC (${hd['hvac_usd']}), "
+                    f"{hd['car_charging_kwh']} kWh on car charging "
+                    f"(${hd['car_charging_usd']}, {hd['car_super_off_peak_pct']}% "
+                    f"already off-peak), {hd['lights_or_fan_kwh']} kWh on lights/fan. "
+                    f"These are inferred from whole-home data, not measured per-circuit.")
+        return "No historical usage data is available right now."
 
     if "unusual" in q or "anomal" in q or "strange" in q:
         learned = [r for r in recos if r.get("detector") == "learned"]
