@@ -103,7 +103,10 @@ powershell -NoProfile -Command "Get-CimInstance Win32_Process | Where-Object { \
 cd ai-home-energy-concierge/code
 "/c/Program Files/mosquitto/mosquitto.exe" -c mosquitto.conf -v > mosquitto.log 2>&1 &
 export AI_ASK=1 AI_PLAN=1 AI_ANOMALY=1 AI_AUTO_LIGHTS=1
-export DEMO_GRACE_S=6 DEMO_AWAY_GRACE_S=5 AUTO_COOLDOWN_S=5 EVAL_INTERVAL_S=2 RESET_SETTLE_S=12
+#    The five demo-pacing values below are the CONFIRMED set (§21.11): ~0.6 s
+#    cue-to-switch, ~5 s from the physical press. Set all five — leaving any at
+#    its shipping default costs ten-plus seconds on beat 2.
+export DEMO_GRACE_S=1 DEMO_AWAY_GRACE_S=1 AUTO_COOLDOWN_S=3 EVAL_INTERVAL_S=1 RESET_SETTLE_S=3
 nohup ./.venv/Scripts/python.exe hub/server.py > /tmp/hub.log 2>&1 &
 curl -s -o /dev/null -w "ask=%{http_code}\n" http://localhost:8000/ask   # MUST be 200
 
@@ -1621,8 +1624,20 @@ action. **Do not reorder these back.**
 2. **Button C's reset takes ~10 s** to finish its Kasa switching. Pressing A before it
    settles measures the tail of the reset, not beat 2. Wait ~30 s after C.
 
-Current demo timings in use (shipping defaults untouched, all env-overridable):
-`DEMO_GRACE_S=1 DEMO_AWAY_GRACE_S=1 AUTO_COOLDOWN_S=3 EVAL_INTERVAL_S=1 RESET_SETTLE_S=3`
+### Confirmed demo timings — LOCKED IN, do not change without re-measuring
+
+```
+DEMO_GRACE_S=1  DEMO_AWAY_GRACE_S=1  AUTO_COOLDOWN_S=3  EVAL_INTERVAL_S=1  RESET_SETTLE_S=3
+```
+
+Confirmed on real hardware by the user: **about 5 s from the physical button press to
+the bulb going dark**, which is the agreed demo feel. Shipping defaults in the code are
+untouched — these are env overrides only.
+
+**Set all five.** They now live in `code/tools/run_demo.ps1`, which previously set only
+`DEMO_GRACE_S=20 DEMO_AWAY_GRACE_S=10` and left the other three at shipping defaults —
+so filming through the launcher would have produced a twenty-second beat 2 while the
+hand-launched hub did it in five. Section 0.1 carries the same five values.
 
 ### Also observed, unresolved
 
@@ -1633,3 +1648,33 @@ Current demo timings in use (shipping defaults untouched, all env-overridable):
   the only real load in the demo is the 10.8 W bulb. Plugging a real load in is the honest
   fix for the "dollar figures too small" beat issue — a 1500 W heater turns $0.042 into
   about **$1.05/hour** at the on-peak rate, genuinely measured rather than scaled.
+
+## 21.12 The confirmed pacing is now enforced, not just documented
+
+The five values in 21.11 lived only in the shell that launched the hub. Any restart �
+by a person, by `run_demo.ps1`, or on the other host � silently reverted to shipping
+defaults, and a hub with default pacing is **indistinguishable from a correct one**
+until you sit and watch beat 2 take ten minutes.
+
+`run_demo.ps1` was itself the trap: it set `DEMO_GRACE_S=20 DEMO_AWAY_GRACE_S=10` and
+left `AUTO_COOLDOWN_S`, `EVAL_INTERVAL_S` and `RESET_SETTLE_S` at their defaults. Filming
+through the launcher would have produced a twenty-second beat 2 while a hand-launched hub
+did it in five � with nothing on screen to explain the difference.
+
+Three changes:
+
+1. **`run_demo.ps1` now sets all five** confirmed values, not two.
+2. **New `GET /api/pacing`** reports what the running hub is *actually* using. These are
+   process-lifetime env overrides and are otherwise invisible from outside.
+3. **The launcher verifies instead of assuming.** It previously inferred "started
+   correctly" from `/ask` answering, which only proves `AI_ASK` was set and says nothing
+   about pacing. It now compares `/api/pacing` against the expected set, restarts the hub
+   on any mismatch, and prints the numbers on success:
+
+   ```
+   pacing OK: grace=1s eval=1s settle=3s  -> beat 2 lands in ~5s
+   ```
+
+Verified: `/api/pacing` returns the confirmed set, `run_demo.ps1` parses clean, smoke
+32/32.
+

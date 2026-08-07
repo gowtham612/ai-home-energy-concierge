@@ -77,7 +77,26 @@ Start-Sleep -Milliseconds 1200
 # demo: the buttons work, the simulator updates, and nothing happens. Check the
 # running process rather than trusting whoever started it.
 $askCode = try { (Invoke-WebRequest -Uri "$hub/ask" -UseBasicParsing -TimeoutSec 5).StatusCode } catch { 0 }
-if ($askCode -ne 200) {
+
+# /ask answering only proves AI_ASK was set. It says nothing about the pacing
+# values, and a hub carrying shipping defaults makes beat 2 take ten MINUTES
+# while looking perfectly healthy. Ask the hub what it is actually running with.
+$WANT = @{ DEMO_GRACE_S = 1; DEMO_AWAY_GRACE_S = 1; AUTO_COOLDOWN_S = 3;
+           EVAL_INTERVAL_S = 1; RESET_SETTLE_S = 3 }
+$pacingOk = $false
+if ($askCode -eq 200) {
+    try {
+        $p = Invoke-RestMethod -Uri "$hub/api/pacing" -TimeoutSec 5
+        $bad = @()
+        foreach ($k in $WANT.Keys) { if ([double]$p.$k -ne [double]$WANT[$k]) { $bad += "$k=$($p.$k) want $($WANT[$k])" } }
+        if (-not $p.AI_AUTO_LIGHTS) { $bad += "AI_AUTO_LIGHTS off" }
+        if ($bad.Count -eq 0) { $pacingOk = $true }
+        else { Write-Host ("  hub pacing is wrong: " + ($bad -join '; ')) -ForegroundColor DarkYellow }
+    } catch {
+        Write-Host "  hub predates /api/pacing - cannot verify timings, restarting" -ForegroundColor DarkYellow
+    }
+}
+if ($askCode -ne 200 -or -not $pacingOk) {
     Write-Host "  hub is not running with the demo flags - restarting it" -ForegroundColor DarkYellow
     Get-CimInstance Win32_Process |
         Where-Object { $_.CommandLine -like '*hub/server.py*' } |
@@ -87,9 +106,18 @@ if ($askCode -ne 200) {
     if (-not (Test-Path $py)) { $py = "python" }
     $env:AI_ASK = "1"; $env:AI_PLAN = "1"; $env:AI_ANOMALY = "1"
     $env:AI_AUTO_LIGHTS = "1"
-    # Shortened so a live press-the-button demo does not wait 10 minutes. This
-    # is a real threshold change; do not put the shortened number on screen.
-    $env:DEMO_GRACE_S = "20"; $env:DEMO_AWAY_GRACE_S = "10"
+    # Demo pacing. Shortened so a press-the-button demo does not wait ten
+    # minutes; these are real threshold changes, so do not put the shortened
+    # numbers on screen as if they were the product defaults.
+    #
+    # These exact five values are the ones confirmed on real hardware: button A
+    # to the bulb going dark measures ~0.6 s cue-to-switch, about 5 s from the
+    # physical press. Set ALL of them. Leaving RESET_SETTLE_S or EVAL_INTERVAL_S
+    # at their shipping defaults quietly costs ten-plus seconds on beat 2, which
+    # is the failure this launcher exists to prevent.
+    $env:DEMO_GRACE_S    = "1"; $env:DEMO_AWAY_GRACE_S = "1"
+    $env:AUTO_COOLDOWN_S = "3"; $env:EVAL_INTERVAL_S   = "1"
+    $env:RESET_SETTLE_S  = "3"
     Start-Process $py -ArgumentList "hub\server.py" -WorkingDirectory $code -WindowStyle Hidden
     for ($i = 0; $i -lt 30; $i++) {
         Start-Sleep -Milliseconds 700
@@ -97,7 +125,23 @@ if ($askCode -ne 200) {
     }
 }
 $askCode = try { (Invoke-WebRequest -Uri "$hub/ask" -UseBasicParsing -TimeoutSec 5).StatusCode } catch { 0 }
-if ($askCode -eq 200) { Write-Host "  hub up with AI_ASK / AI_PLAN / AI_ANOMALY / AI_AUTO_LIGHTS" -ForegroundColor Green }
+if ($askCode -eq 200) {
+    Write-Host "  hub up with AI_ASK / AI_PLAN / AI_ANOMALY / AI_AUTO_LIGHTS" -ForegroundColor Green
+    # Re-verify pacing after the restart and SAY the numbers. Beat 2's timing is
+    # the one thing here you cannot eyeball until you are already filming.
+    try {
+        $p = Invoke-RestMethod -Uri "$hub/api/pacing" -TimeoutSec 5
+        $bad = @()
+        foreach ($k in $WANT.Keys) { if ([double]$p.$k -ne [double]$WANT[$k]) { $bad += "$k=$($p.$k)" } }
+        if ($bad.Count -eq 0) {
+            Write-Host ("  pacing OK: grace=$($p.DEMO_GRACE_S)s eval=$($p.EVAL_INTERVAL_S)s " +
+                        "settle=$($p.RESET_SETTLE_S)s  -> beat 2 lands in ~5s") -ForegroundColor Green
+        } else {
+            Write-Host ("  WARNING: pacing still wrong (" + ($bad -join '; ') +
+                        ") - beat 2 will be slow") -ForegroundColor Red
+        }
+    } catch { Write-Host "  WARNING: /api/pacing unavailable - cannot confirm beat 2 timing" -ForegroundColor Red }
+}
 else { Write-Host "  WARNING: /ask still not answering - the AI beats will not work" -ForegroundColor Red }
 
 # --- browsers ---------------------------------------------------------------

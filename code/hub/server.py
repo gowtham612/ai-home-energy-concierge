@@ -684,6 +684,27 @@ async def api_state():
     return JSONResponse(STORE.public_state())
 
 
+@app.get("/api/pacing")
+async def api_pacing():
+    """The demo-pacing values this hub is ACTUALLY running with.
+
+    These are process-lifetime environment overrides, so they are invisible from
+    outside — a hub started without them looks identical to one started with
+    them until you sit and watch a beat take ten minutes instead of five
+    seconds. `run_demo.ps1` used to infer "started correctly" from /ask
+    answering, which only proves AI_ASK was set and says nothing about pacing.
+    Report the numbers so the launcher can verify rather than assume.
+    """
+    return JSONResponse({
+        "DEMO_GRACE_S": rules.UNOCCUPIED_GRACE_S,
+        "DEMO_AWAY_GRACE_S": rules.AWAY_HVAC_GRACE_S,
+        "AUTO_COOLDOWN_S": AUTO_COOLDOWN_S,
+        "EVAL_INTERVAL_S": EVAL_INTERVAL_S,
+        "RESET_SETTLE_S": RESET_SETTLE_S,
+        "AI_AUTO_LIGHTS": os.environ.get("AI_AUTO_LIGHTS", "0") == "1",
+    })
+
+
 @app.get("/api/recos")
 async def api_recos():
     return JSONResponse([r.to_dict() for r in STORE.latest_recos(25)])
