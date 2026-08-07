@@ -2172,3 +2172,95 @@ curl -s -o /dev/null -w "%{http_code} %{time_total}s
 " --max-time 20 http://localhost:18181/v1/models
 ```
 
+
+---
+
+# 28. Beats 3-5 verified; what-if questions made computable (2026-08-07)
+
+## 28.1 Beat 5 was IMPOSSIBLE in the obvious order
+
+`rules.evaluate` ends with `findings = r7_comfort_guardrail(findings, snapshot)`, and
+that function **removes** a finding rather than flagging it: above 27 C the "cooling an
+empty home" finding is dropped before it can become a card.
+
+There are effectively two R7s, and they interlock badly:
+
+| | Where | Effect |
+|---|---|---|
+| prevention | `rules.r7_comfort_guardrail` | **deletes** the finding while too hot |
+| refusal | `server._guardrail_allows` | returns **409** when the action is attempted |
+
+The 409 needs a card; the card is suppressed by the same condition. So heating the room
+FIRST and then looking for something to approve can never work — `/api/apply` answers
+404 unknown reco_id, and it looks like the plumbing is broken when it is the design.
+
+**The order that works** — create the card while comfortable, then heat the room:
+
+```
+1. press C           steady state, comfortable (21.9 C), clock pinned 18:30
+2. press A           away  -> r2-living-ac card appears (still comfortable)
+3. knob to HOT       29.4 C - now too warm to cut cooling
+4. approve the AC card
+   -> HTTP 409  {"refused":true,
+                 "reason":"living is 29.4C, above the 27C comfort limit ...",
+                 "gate":"comfort_guardrail"}
+```
+
+The card persists because `STORE.recos` is append-only, so suppressing the finding later
+does not withdraw the card. The narrative is also better this way: the system raised the
+recommendation itself, the room then got hot, and it now refuses to carry out its own
+advice.
+
+**Worth reconsidering after the deadline:** R7 dropping findings silently means a user is
+never told that a saving exists but is being withheld for comfort. Annotating the finding
+(`blocked_by_guardrail`) instead of deleting it would keep the card visible with an amber
+refusal state, and make the beat work in any order.
+
+## 28.2 Every finding now gets a card in the same tick
+
+Narration is one model call per finding taking seconds, and dict order put the A/C —
+the critical finding — behind the lights. Approve pressed into that gap got 404.
+
+- findings are narrated **severity first** (critical before serious)
+- at most **one LLM narration per tick**; the rest get their deterministic card
+  immediately and are upgraded on a later tick
+
+A card is what `/api/apply` resolves and what a person clicks. A finding without one is a
+live action with no way to take it.
+
+## 28.3 What-if questions are answered from an appliance catalogue
+
+*"What if I shift the dryer to 9 PM?"* is a button on the `/ask` page and answered
+*"the digest does not contain information about the dryer"*. The catalogue existed in
+`energy_model.LOADS` — it was simply never shown to `/ask`.
+
+- **8 appliances added** (microwave, electric range, oven, table fan, patio lights,
+  washing machine, water heater, EV charger); catalogue is now **21**.
+- **`typical_run_h` added to every entry.** A shift question is watts x hours x rate
+  difference; without a duration there is no number to give.
+- The catalogue is published into the digest and the **allowed** map, so the figures
+  verify instead of being flagged as invented.
+- Shift questions are **computed**, not modelled - the prompt forbids arithmetic.
+
+```
+What if I shift the dryer to 9 PM?
+  [computed/verified] A typical clothes dryer (electric) draws 3000 W for about
+  1.0 h - 3.00 kWh. Running it now (super off peak, $0.38818/kWh) costs $1.16;
+  at 21:00 (off peak, $0.4756/kWh) it costs $1.43. Shifting it costs an extra
+  $0.26 per run. This is a typical nameplate figure, not a measurement of your
+  appliance.
+```
+
+Every figure is labelled a typical nameplate rating, never a measurement of this house.
+
+The pairwise **delta** between periods had to be added to the allowed map separately: it
+is the actual answer to a shift question and is not any single figure, so without it the
+arithmetic verified while the conclusion did not.
+
+## 28.4 A backspace byte in a regex
+
+`_hour_in` silently matched nothing: writing the file through a shell heredoc turned
+`` into a literal 0x08 byte, so the pattern contained a control character where the
+word boundary should have been. It compiled, imported and returned None for every input.
+Visible only via `cat -A`. Write regexes with the Edit tool, not a heredoc.
+

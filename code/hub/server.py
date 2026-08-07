@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 import rules
-from llm import LLMClient, Recommendation, LLM_BASE_URL
+from llm import LLMClient, Recommendation, LLM_BASE_URL, template_narrate
 
 try:
     import paho.mqtt.client as mqtt
@@ -603,17 +603,38 @@ def evaluation_tick() -> List[Recommendation]:
 
     fresh: List[Recommendation] = []
     now = time.time()
+
+    # Severity first, so the critical finding gets its card before the merely
+    # serious one. Narration is a model call per finding taking seconds, and
+    # dict order meant the A/C — the finding beat 5 is built on — queued behind
+    # the lights. Approve was pressed into that gap and got 404 unknown reco_id.
+    _RANK = {"critical": 0, "serious": 1, "warning": 2, "info": 3}
+    findings = sorted(findings, key=lambda f: _RANK.get(f.severity, 9))
+
+    # At most one LLM narration per tick. The others get their deterministic
+    # card IMMEDIATELY and are upgraded on a later tick.
+    #
+    # The card is what /api/apply resolves and what a person clicks, so a
+    # finding that exists without one is a live action with no way to take it —
+    # which on camera is an Approve button that 404s. A template card is worth
+    # far more than a missing one, and the wording improves a second later.
+    llm_budget = 1
     for f in findings:
         # Already acted on — do not re-narrate a finding the user has resolved.
         if f.id in STORE.applied_ids:
             continue
         last = STORE.last_narrated.get(f.id, 0)
-        if now - last < RECO_COOLDOWN_S:
+        already_carded = any(r.id == f.id for r in STORE.recos)
+        if already_carded and now - last < RECO_COOLDOWN_S:
             continue          # cooldown — this is what stops the demo flooding
         STORE.last_narrated[f.id] = now
 
         try:
-            rec = LLM.narrate(f)
+            if llm_budget > 0:
+                llm_budget -= 1
+                rec = LLM.narrate(f)
+            else:
+                rec = template_narrate(f)
         except Exception as exc:
             print(f"[eval] narration failed hard: {exc}")
             continue

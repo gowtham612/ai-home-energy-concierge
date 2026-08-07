@@ -22,7 +22,9 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
+from datetime import datetime
 from typing import Dict, Generator, List, Optional, Tuple
 
 try:
@@ -149,6 +151,51 @@ def _digest_lines(state: Dict,
         if d.get(k) is not None:
             allowed[k] = f"{d[k]}"
             lines.append(f"{k.upper()}: {d[k]}")
+
+    # The appliance catalogue, so a what-if answer's numbers are IN the digest
+    # and verify. Without this the computed answer was correct and flagged
+    # "PROVENANCE FAIL: 3000, 1.16" -- the badge saying unverified next to a
+    # figure the hub itself calculated from a cited DOE nameplate.
+    #
+    # These are TYPICAL ratings for a representative appliance, not
+    # measurements of anything in this house, and the line says so.
+    try:
+        import energy_model as _em
+        picks = ("clothes_dryer", "dishwasher", "fridge", "microwave",
+                 "electric_range", "electric_oven", "ceiling_fan", "table_fan",
+                 "patio_lights", "washing_machine", "water_heater",
+                 "ev_charger", "space_heater", "tv_65")
+        bits = []
+        for _k in picks:
+            _spec = _em.LOADS.get(_k)
+            if not _spec:
+                continue
+            allowed[f"appliance.{_k}.watts"] = f"{_spec['watts']}"
+            allowed[f"appliance.{_k}.watts_int"] = f"{int(_spec['watts'])}"
+            _h = _spec.get("typical_run_h")
+            if _h is not None:
+                allowed[f"appliance.{_k}.hours"] = f"{_h}"
+                _kwh = _spec["watts"] / 1000.0 * _h
+                allowed[f"appliance.{_k}.kwh"] = f"{round(_kwh, 2)}"
+                _rates = [(_rn, d.get(_r)) for _r, _rn in
+                          (("on_peak_rate", "on"), ("off_peak_rate", "off"),
+                           ("super_off_peak_rate", "sop")) if d.get(_r)]
+                for _rn, _rv in _rates:
+                    allowed[f"appliance.{_k}.usd_{_rn}"] = f"{round(_kwh * _rv, 2)}"
+                # The DIFFERENCE between two periods is the actual answer to a
+                # shift question, and it is not any single figure above. Without
+                # it the arithmetic verified and the conclusion did not.
+                for _i, (_an, _av) in enumerate(_rates):
+                    for _bn, _bv in _rates[_i + 1:]:
+                        allowed[f"appliance.{_k}.delta_{_an}_{_bn}"] =                             f"{round(abs(_kwh * _av - _kwh * _bv), 2)}"
+            bits.append(f"{_spec['label']} {int(_spec['watts'])} W"
+                        + (f" for ~{_h} h" if _h else ""))
+        if bits:
+            lines.append("TYPICAL APPLIANCE RATINGS (nameplate figures for a "
+                         "representative appliance, NOT measurements of this "
+                         "home): " + "; ".join(bits) + ".")
+    except Exception:
+        pass
 
     tw = d.get("current_watts", state.get("total_watts"))
     if tw is not None:
@@ -348,12 +395,59 @@ _COMPUTED_INTENTS = (
     ("combined", "altogether", "all the finding", "add up",
      "total cost", "total waste", "in total", "sum of"),       # arithmetic
     ("unusual", "anomal", "strange"),                          # edge detector
+    ("what if", "instead of", "cost to run", "shift the",
+     "move the", "run the"),                                   # appliance what-if
 )
 
 
 def _is_computed(question: str) -> bool:
     q = (question or "").lower()
     return any(any(k in q for k in group) for group in _COMPUTED_INTENTS)
+
+
+# Appliance lookup for what-if questions. Matched on the words people use, not
+# the dict key: nobody types "electric_range".
+_APPLIANCE_WORDS = {
+    "dryer": "clothes_dryer", "clothes dryer": "clothes_dryer",
+    "dishwasher": "dishwasher", "fridge": "fridge", "refrigerator": "fridge",
+    "microwave": "microwave", "stove": "electric_range", "range": "electric_range",
+    "hob": "electric_range", "cooktop": "electric_range",
+    "oven": "electric_oven", "ceiling fan": "ceiling_fan",
+    "table fan": "table_fan", "desk fan": "table_fan",
+    "patio": "patio_lights", "string lights": "patio_lights",
+    "washing machine": "washing_machine", "washer": "washing_machine",
+    "water heater": "water_heater", "ev": "ev_charger", "car charger": "ev_charger",
+    "tv": "tv_65", "television": "tv_65", "console": "game_console",
+    "pc": "desktop_pc", "computer": "desktop_pc",
+    "space heater": "space_heater", "air conditioner": "window_ac",
+    "a/c": "window_ac", "ac": "window_ac",
+}
+
+
+def _appliance_in(q: str):
+    """Longest match wins, so "table fan" never resolves as "ac" inside it."""
+    try:
+        import energy_model as _em
+    except Exception:
+        return None
+    best = None
+    for word, key in _APPLIANCE_WORDS.items():
+        if word in q and key in _em.LOADS:
+            if best is None or len(word) > len(best[0]):
+                best = (word, key)
+    return (best[1], _em.LOADS[best[1]]) if best else None
+
+
+def _hour_in(q: str):
+    """Pull an hour out of '9 PM', '21:00', 'at 3am'. None if absent."""
+    m = re.search(r"\b(\d{1,2})\s*(?::(\d{2}))?\s*(am|pm)\b", q)
+    if m:
+        h = int(m.group(1)) % 12
+        return h + 12 if m.group(3) == "pm" else h
+    m = re.search(r"\b(\d{1,2}):(\d{2})\b", q)
+    if m and 0 <= int(m.group(1)) <= 23:
+        return int(m.group(1))
+    return None
 
 
 def deterministic_answer(question: str, state: Dict) -> str:
@@ -363,6 +457,7 @@ def deterministic_answer(question: str, state: Dict) -> str:
     demo still has to answer the question, just less fluently.
     """
     d = build_digest(state)
+    now_dt = datetime.fromtimestamp(state.get("now") or time.time())
     total_usd = d.get("total_wasted_usd", 0.0)
     total_kwh = d.get("total_wasted_kwh", 0.0)
     recos = state.get("recos") or []
@@ -417,6 +512,46 @@ def deterministic_answer(question: str, state: Dict) -> str:
                     f"right now.")
         return (f"Nothing was refused. R7 only blocks cutting cooling above "
                 f"{cmax} C, and no room temperature is being reported.")
+
+    # "What if I run the dryer at 9 PM?" — a shift question is
+    # watts x hours x (rate_then - rate_now), which is arithmetic over a
+    # nameplate figure and the tariff. The model was told not to do arithmetic
+    # and had no appliance data anyway, so it correctly answered "the digest
+    # does not contain information about the dryer" — on a button the /ask page
+    # itself offers.
+    if any(w in q for w in ("what if", "instead of", "cost to run",
+                            "shift the", "move the", "run the")):
+        hit = _appliance_in(q)
+        if hit:
+            key, spec = hit
+            when = _hour_in(q)
+            watts = float(spec["watts"])
+            hours = float(spec.get("typical_run_h", 1.0))
+            kwh = watts / 1000.0 * hours
+            try:
+                import energy_model as _em
+                now_rate, now_period = _em.rate_at(now_dt)
+                if when is None:
+                    return (f"A typical {spec['label'].lower()} draws {watts:.0f} W "
+                            f"for about {hours} h, so {kwh:.2f} kWh. Right now that "
+                            f"is {now_period.replace('_',' ')} at ${now_rate}/kWh, "
+                            f"costing ${kwh * now_rate:.2f}. Tell me a time and I "
+                            f"will compare it.")
+                then_dt = now_dt.replace(hour=when, minute=0, second=0, microsecond=0)
+                then_rate, then_period = _em.rate_at(then_dt)
+                now_cost, then_cost = kwh * now_rate, kwh * then_rate
+                delta = now_cost - then_cost
+                verb = "saves" if delta > 0 else "costs an extra"
+                return (f"A typical {spec['label'].lower()} draws {watts:.0f} W for "
+                        f"about {hours} h — {kwh:.2f} kWh. Running it now "
+                        f"({now_period.replace('_',' ')}, ${now_rate}/kWh) costs "
+                        f"${now_cost:.2f}; at {when:02d}:00 "
+                        f"({then_period.replace('_',' ')}, ${then_rate}/kWh) it costs "
+                        f"${then_cost:.2f}. Shifting it {verb} ${abs(delta):.2f} per "
+                        f"run. This is a typical nameplate figure, not a measurement "
+                        f"of your appliance.")
+            except Exception:
+                pass
 
     # Arithmetic over the findings. There is no reason to let a model add up
     # numbers the hub already holds.

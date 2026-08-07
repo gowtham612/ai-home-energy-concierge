@@ -42,7 +42,30 @@ LOADS: Dict[str, Dict] = {
     "dishwasher":       {"watts": 1200.0, "label": "Dishwasher (heated cycle)",   "source": "Energy Star typical with heated dry"},
     "fridge":           {"watts": 150.0,  "label": "Refrigerator (compressor on)", "source": "Energy Star typical mid-size"},
     "standby_phantom":  {"watts": 12.0,   "label": "Standby / phantom load",      "source": "LBNL standby power survey, per-device average"},
+    # Added so "what if I run the dryer at 9 PM?" is answerable. These are
+    # NAMEPLATE / typical figures for a representative appliance, not
+    # measurements of anything in this house, and every answer that cites one
+    # says "a typical X". typical_run_h is what makes a what-if computable at
+    # all: a shift question is watts x hours x (rate_then - rate_now), and
+    # without a duration there is no number to give.
+    "microwave":        {"watts": 1200.0, "label": "Microwave oven",               "source": "nameplate, standard US 120 V unit", "typical_run_h": 0.1},
+    "electric_range":   {"watts": 2400.0, "label": "Electric stove (one element)", "source": "US DOE typical 8-inch element",     "typical_run_h": 0.5},
+    "electric_oven":    {"watts": 2400.0, "label": "Electric oven (baking)",       "source": "US DOE typical wall oven",          "typical_run_h": 1.0},
+    "table_fan":        {"watts": 35.0,   "label": "Table / desk fan",             "source": "nameplate, typical 12-inch fan",    "typical_run_h": 4.0},
+    "patio_lights":     {"watts": 60.0,   "label": "Patio string lights (LED)",    "source": "typical 48-ft LED string",          "typical_run_h": 5.0},
+    "washing_machine":  {"watts": 500.0,  "label": "Washing machine (warm wash)",  "source": "Energy Star typical front loader",  "typical_run_h": 1.0},
+    "water_heater":     {"watts": 4500.0, "label": "Electric water heater",        "source": "nameplate, standard resistance tank", "typical_run_h": 3.0},
+    "ev_charger":       {"watts": 7200.0, "label": "EV charger (Level 2)",         "source": "typical 240 V 30 A home charger",   "typical_run_h": 4.0},
 }
+
+# Cycle appliances get a duration too, so any of them can answer a shift
+# question. The ones above carry their own; these are the pre-existing entries.
+for _k, _h in (("clothes_dryer", 1.0), ("dishwasher", 1.5), ("fridge", 24.0),
+               ("ceiling_fan", 6.0), ("window_ac", 6.0), ("central_ac", 6.0),
+               ("space_heater", 4.0), ("led_bulb_set", 5.0),
+               ("incandescent_set", 5.0), ("tv_65", 4.0), ("desktop_pc", 8.0),
+               ("game_console", 3.0), ("standby_phantom", 24.0)):
+    LOADS[_k].setdefault("typical_run_h", _h)
 
 # --------------------------------------------------------------------------
 # Tariff — SDG&E Schedule TOU-DR1, from the published rate table
