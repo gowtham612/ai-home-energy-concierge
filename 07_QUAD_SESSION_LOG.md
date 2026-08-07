@@ -18,23 +18,46 @@ credential is referenced by variable name and storage location only; see
 
 ## 0. Resume point — read this first
 
-> ### ⚡ LATEST STATE (2026-08-06) — read §18 before anything else
+> ### ⚡ LATEST STATE (2026-08-06, late) — read §21 before anything else
 >
-> **The network moved.** Everything is now on a home LAN, NOT the old
-> `172.20.10.x` phone hotspot:
+> **⚠ This project is now worked on from MULTIPLE HOSTS, each running Claude.**
+> Record every change here. A force-push from the other host already destroyed
+> work once — see §21.7. **Pull before you push. Never force-push `main`.**
 >
 > | | |
 > |---|---|
 > | PC (broker + hub) | `192.168.86.34` |
-> | UNO Q board | `192.168.86.51` (Wi-Fi SSID `ArtiFi`) |
-> | `lights` — KL120 bulb "Bedroom light 2" | `192.168.86.49` |
-> | `ac` — HS110 plug "Space heater" | `192.168.86.20` (HS110 = real energy metering) |
+> | UNO Q board | `192.168.86.51` (SSID `ArtiFi`), ADB serial `3933751369` |
+> | `lights` — KL120 "Bedroom light 2" | 🔴 **NOT ON THE NETWORK** |
+> | `ac` — HS110 "Space heater" | 🔴 **NOT ON THE NETWORK** |
 >
-> MQTT goes over **Wi-Fi** now (`MQTT_HOST=192.168.86.34`), not the USB tunnel.
-> `adb reverse tcp:1883` is still a valid fallback if the LAN path dies.
+> 🔴 **CURRENT BLOCKER — the actuator is `simulated`.** Both Kasa devices are
+> absent: discovery finds only four *foreign* devices on the venue LAN, and direct
+> probes of their last-known IPs (`.49`, `.20`) time out. Sensing, cues, presence,
+> rules and `/ask` all work; **the real bulb will not switch**, so the Archetype E
+> beat cannot be filmed until those two devices rejoin. **Do NOT bind the actuator
+> to the venue's devices — they are not ours.** Full detail in §21.6.
 >
-> **Modulino Buttons work** (§17): A = toggle bulb, B = toggle heater,
-> C = rescan bus. LEDs show *device-confirmed* state.
+> **MQTT runs over the USB tunnel on port `11883`, NOT Wi-Fi.** The board runs its
+> own mosquitto on `*:1883`, so `adb reverse tcp:1883` silently fails while looking
+> healthy. This is the single most misleading failure on the project — §21.3.
+> ```bash
+> adb -s 3933751369 reverse tcp:11883 tcp:1883    # board.env: MQTT_PORT=11883
+> ```
+> **A reboot destroys `adb reverse`** — recreate it. `board.env` survives.
+>
+> **Buttons (current): A = presence away · B = ambient light · C = reset to steady
+> state.** This supersedes the old "A = toggle bulb, B = toggle heater, C = rescan"
+> mapping — §21.8. Occupancy has been **removed** from the simulator UI; do not
+> reintroduce it.
+>
+> **Run only ONE hub** — two share client_id `hub-orchestrator` and knock each other
+> off the broker forever (§21.4). Hub needs its demo flags or `/ask` 404s:
+> `AI_ASK=1 AI_PLAN=1 AI_ANOMALY=1 AI_AUTO_LIGHTS=1`.
+>
+> **`/api/state` shape:** `loads` is **top-level**, keyed `"living/lights"`;
+> presence is at **`user.presence`**. Reading `rooms.living.loads` makes a healthy
+> system look dead (§21.9).
 >
 > **⚠ The single worst trap on this project — read §18.1.** If the board looks
 > alive but the hub gets nothing, suspect **CRLF in `board.env`** before
@@ -72,20 +95,37 @@ Verified working end to end:
 ### 0.1 Restart everything after a reboot
 
 ```bash
-# 1. PC: broker + hub
+# 0. Kill any stale hub FIRST. Two hubs share client_id and fight forever (§21.4).
+powershell -NoProfile -Command "Get-CimInstance Win32_Process | Where-Object { \$_.CommandLine -like '*hub*server.py*' -and \$_.Name -like 'python*' } | ForEach-Object { Stop-Process -Id \$_.ProcessId -Force }"
+
+# 1. PC: broker + hub. The AI flags default OFF; without them /ask 404s and the
+#    autonomous lights never fire — a failure that looks like broken hardware.
 cd ai-home-energy-concierge/code
 "/c/Program Files/mosquitto/mosquitto.exe" -c mosquitto.conf -v > mosquitto.log 2>&1 &
-.venv/Scripts/python.exe hub/server.py > hub.log 2>&1 &
-curl -s http://localhost:8000/api/state      # expect mqtt_connected: true
+export AI_ASK=1 AI_PLAN=1 AI_ANOMALY=1 AI_AUTO_LIGHTS=1
+export DEMO_GRACE_S=6 DEMO_AWAY_GRACE_S=5 AUTO_COOLDOWN_S=5 EVAL_INTERVAL_S=2 RESET_SETTLE_S=12
+nohup ./.venv/Scripts/python.exe hub/server.py > /tmp/hub.log 2>&1 &
+curl -s -o /dev/null -w "ask=%{http_code}\n" http://localhost:8000/ask   # MUST be 200
 
-# 2. Board: publisher (over ADB; no Wi-Fi needed for this step)
+# 2. MQTT tunnel — port 11883, NOT 1883 (§21.3). A reboot destroys this.
 ADB="$LOCALAPPDATA/Android/Sdk/platform-tools/adb.exe"
-$ADB devices                                  # expect one device
-$ADB shell "cd /home/arduino/ai-home-energy-concierge/code/arduino \
+BOARD=3933751369
+$ADB -s $BOARD reverse tcp:11883 tcp:1883
+$ADB -s $BOARD reverse --list                 # expect  UsbFfs tcp:11883 tcp:1883
+
+# 3. Board: publisher. Use `setsid ... &` and background the whole adb call —
+#    `nohup ... &` inside adb shell holds the channel open and blocks.
+#    Never `pkill -9 -f`: it kills the adb shell itself (exit 137).
+$ADB -s $BOARD shell "pkill -f uno_q_publisher.py"; sleep 3
+$ADB -s $BOARD shell "cd /home/arduino/ai-home-energy-concierge/code/arduino \
    && set -a && . ./board.env && set +a \
-   && MCU_SIGNALS= setsid nohup ~/energy-venv/bin/python3 -u uno_q_publisher.py \
-      > /tmp/publisher.log 2>&1 < /dev/null &"
-$ADB shell "grep -E 'ready|kasa' /tmp/publisher.log"
+   && setsid ~/energy-venv/bin/python3 uno_q_publisher.py \
+      > /tmp/publisher.log 2>&1 < /dev/null &" &
+sleep 15
+$ADB -s $BOARD shell "grep -E 'ready|kasa|MQTT connected' /tmp/publisher.log"
+
+# 4. Prove the board's data actually reaches the PC (not the board's own broker):
+curl -s http://localhost:8000/api/state | python -c "import json,sys; d=json.load(sys.stdin); print(d['user']['presence'], {k:v['state'] for k,v in d['loads'].items()})"
 ```
 
 Expect `[kasa] lights -> …`, `[kasa] ac -> …`, and **`subscribed home/command/#`**.
@@ -1344,3 +1384,182 @@ the house — that has to be true of the repo too.
   `AI_ASK=1 python hub/server.py` on the X Elite and ask *"when is the cheapest
   time to run the dryer?"* — that question is now answerable and is a good demo
   beat.
+
+---
+
+# 21. Multi-host session (2026-08-06) — transport, staleness and process bugs
+
+> **Written from the Windows workshop PC.** This project is now worked on from
+> **multiple hosts, each running Claude.** Anything learned here must land in this
+> file, or the other host re-derives it — or silently undoes it (see §21.7).
+
+## 21.1 Button A did nothing — the publisher was ~10 minutes behind
+
+**The headline bug.** Pressing A set `presence=away` in the UI but nothing else
+happened, and no error appeared anywhere.
+
+The MCU emits at a steady 1 Hz. `uno_q_publisher.py` read **one line per pass** while
+doing **synchronous Kasa I/O in the same loop** (seconds when a device is slow to
+answer). Falling behind a producer you cannot outrun makes the lag **permanent** — the
+backlog only grows. Measured **87 KB queued** on the router socket, about ten minutes of
+telemetry. The press incremented the MCU counter instantly, but `ButtonWatch.observe()`
+was still working through lines from before the press.
+
+**Fix (commit `dda7b42`):** drain the socket and coalesce in `tcp_lines()`.
+
+- Acks are **events** so every one is still forwarded.
+- Telemetry is a **state snapshot**, and the button fields are **cumulative counters**,
+  so the newest line already carries everything the skipped ones would have said. That
+  losslessness is exactly why counters were chosen over edges in the first place.
+- The skipped total is **logged, not hidden** (`STALE_SKIPPED`).
+
+**Diagnostic — the single most useful command on this project:**
+
+```bash
+adb -s 3933751369 shell "ss -tanp | grep 7500"
+# The socket owned by python3 (the publisher) must have recv-q ~0.
+```
+
+## 21.2 A socket on :7500 with a huge recv-q and no owner is NOT the bug
+
+`ss -tanp` only shows owners for **processes you own**. A connection with a large,
+growing recv-q and a blank owner column belongs to a **root** process:
+`arduino-router-serial.service`, the socat proxy mirroring :7500 to `/dev/ttyGS0`. It
+backs up whenever no host reads that COM port, and it reappears after every reboot.
+
+**Verified harmless** — a fresh reader still gets a clean 1 Hz (11 lines in 11 s). Only
+ever judge lag by **the publisher's own socket**.
+
+## 21.3 MQTT tunnel must be port 11883 — 1883 silently fails
+
+**The board runs its own mosquitto on `*:1883`.** So `adb reverse tcp:1883 tcp:1883`
+**cannot bind**. `adb reverse --list` still shows the mapping, but it is dead, and the
+publisher connects to the **board's local broker** instead. The publisher logs
+`MQTT connected rc=0` and looks perfectly healthy while the hub sits at `loads {}` and
+`presence None` forever. Nothing errors.
+
+```bash
+adb -s 3933751369 reverse --remove tcp:1883
+adb -s 3933751369 reverse tcp:11883 tcp:1883    # board.env: MQTT_PORT=11883
+```
+
+Prove data actually lands on the **PC** broker by subscribing to `home/#` there. Do not
+trust `adb reverse --list` or the publisher's own log.
+
+> This **supersedes the section 0 claim that MQTT runs over Wi-Fi.** It is the USB
+> tunnel, on 11883, per the instruction to keep ADB-over-USB.
+
+## 21.4 Only ever run ONE hub
+
+Two `hub/server.py` processes both use client_id `hub-orchestrator` and kick each other
+off the broker forever (`[mqtt] disconnected rc=7`). Neither ingests reliably. Seen with
+**four** hub processes alive at once.
+
+```bash
+powershell -NoProfile -Command "Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like '*hub*server.py*' -and $_.Name -like 'python*' } | ForEach-Object { Write-Host $_.ProcessId }"
+```
+
+## 21.5 The LLM banner lied (commit `af4cf4b`)
+
+The startup banner carried its own stale default `http://localhost:8080/v1` from an
+earlier llama.cpp setup, while `llm.py` had moved to GenieX on
+`http://127.0.0.1:18181/v1`. Inference worked fine; the banner sent anyone debugging a
+quiet LLM to a port nothing was listening on. It now reads the constant from `llm.py` so
+the two cannot drift again.
+
+## 21.6 The network has moved three times — and the devices are currently GONE
+
+The SSID stays `ArtiFi`; the network underneath does not:
+
+```
+172.20.10.8/28 (iPhone hotspot) -> 192.168.137.104/24 (Windows ICS) -> 192.168.86.51/24
+```
+
+**CURRENT BLOCKER.** After the board rebooted at 02:52, the Kasa devices are not present.
+Discovery from the PC finds four devices, none of them ours:
+
+```
+192.168.86.28 Living room light 2 | .23 Front door light | .30 TP-LINK_Smart Plug_5307 | .39 Office 1
+```
+
+Direct probes of the IPs documented in section 0 (`192.168.86.49`, `192.168.86.20`) both
+time out. Those four are almost certainly **other people's devices on the venue LAN — do
+NOT bind the actuator to them.**
+
+Result: `[uno_q] command listener ready (actuator source: simulated)`. Sensing, cues,
+presence, rules and `/ask` all still work; **only the real physical actuation is dead**,
+which is the Archetype E beat.
+
+Established while diagnosing:
+
+- The board **can** reach Kasa devices on `192.168.86.x` by **unicast** (`.28:9999` and
+  `.39:9999` both open), so board-side actuation works once the right devices return.
+- The board's **UDP discovery broadcast is blocked** on this LAN — that is why the board
+  found nothing while the PC found four. Set explicit IPs in `board.env`.
+- The board **cannot ping the PC** (Windows firewall drops ICMP). Harmless, because MQTT
+  goes over the USB tunnel.
+- **A reboot destroys `adb reverse`**; recreate it. `board.env` survives a reboot.
+  A missing `/tmp/publisher.log` is a reliable reboot tell.
+
+## 21.7 A force-push from another host destroyed work
+
+`origin/main` went `7c62547 -> fb0993c`, **skipping `96169b9`**. Lost: the Occupancy
+removal, the auto-actuation cooldown fix, and env-overridable grace periods. Recovered by
+merging local into `origin/main` as `2355f31`.
+
+**Commits being reachable is NOT proof the content survived.** Audit by content:
+
+```bash
+git show origin/main:code/simulator/index.html | grep -c 'id="occOn"'   # expect 0
+git show origin/main:code/hub/server.py | grep -c 'RESET_SETTLE_S'      # expect >=1
+[ "$(git rev-parse HEAD^{tree})" = "$(git rev-parse origin/main^{tree})" ] && echo IDENTICAL
+```
+
+**Pull before you push. Never force-push `main`.**
+
+## 21.8 Current button mapping (supersedes section 0)
+
+| Button | Action | Counter |
+|---|---|---|
+| **A** | presence to **away**, and sets occupancy false | `b1` |
+| **B** | ambient light toggle (lux 900 / 60, threshold 300) | `b2` |
+| **C** | **reset to steady state** (home, lights + HVAC on) | `b3` |
+
+Presses travel as **cues** on MQTT `home/demo/cue` so the simulator moves its own
+controls rather than having values change behind its back. A must set **both** presence
+and occupancy — setting only presence left occupancy true, R1 bailed on its first line,
+and beat 2 silently did nothing.
+
+**Occupancy was removed from the simulator UI entirely** — `setPres()` drives `setOcc()`.
+Do not reintroduce it.
+
+Simulate a press without hardware (always `shutdown()` then `close()`, or you strand a
+socket):
+
+```bash
+adb -s 3933751369 shell "timeout 10 python3 -c \"
+import socket,time
+s=socket.create_connection(('127.0.0.1',7500),5)
+try: s.sendall(b'SIMBTN a\n'); time.sleep(2)
+finally: s.shutdown(socket.SHUT_RDWR); s.close()\""
+```
+
+## 21.9 State-shape gotcha
+
+`/api/state` puts **`loads` at the top level**, keyed `"living/lights"` — *not*
+`rooms.living.loads`. Presence is at **`user.presence`** — *not* top level. Reading the
+wrong paths makes a completely healthy system look dead.
+
+## 21.10 Verified at end of session
+
+| Check | Result |
+|---|---|
+| `smoke_test.py` | **32/32** |
+| Board runs the committed publisher | byte-identical after CRLF normalization |
+| Publisher recv-q | **0** (was 87 KB) |
+| `SIMBTN a` to hub | `presence=away`, re-confirmed after a cold boot |
+| Banner LLM URL | `http://127.0.0.1:18181/v1`, matches `llm.py` |
+| Physical actuation | **simulated** — devices absent, see 21.6 |
+
+`smoke_test.py` has **zero** coverage of `uno_q_publisher.py`, so 21.1 is verified
+behaviourally, not by tests.
