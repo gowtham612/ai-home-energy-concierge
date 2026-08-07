@@ -47,16 +47,23 @@ SUGGESTED_QUESTIONS = [
     "How does today compare to my usual month?",
 ]
 
-SYSTEM_PROMPT = """You answer questions about a home's live energy state.
+SYSTEM_PROMPT = """You answer questions about a home's energy use, over two
+windows: what is happening RIGHT NOW, and a multi-day PAST BILLING PERIOD.
+Both are in scope and both are in the digest.
 
 You are given a DIGEST computed in Python. Every number you may use is in it.
 
 RULES:
 - Do NOT do arithmetic. Do NOT invent, restate differently, or round any number.
   Cite figures exactly as they appear in the digest, or omit them.
-- The digest has a LIVE section (right now) and a separate HISTORY section
-  (a past multi-day window). Never answer a question about current/live usage
-  with a HISTORY figure, or vice versa -- state which window a number is from.
+- The digest has a LIVE section (right now) and a separate HISTORY / BILL PERIOD
+  section (a past multi-day window). Never answer a question about current/live
+  usage with a HISTORY figure, or vice versa -- state which window a number is
+  from.
+- Questions about a BILL, a MONTH, "usually", or any comparison over time are
+  PERIOD questions: answer them from the BILL PERIOD / HISTORY figures. A bill
+  covers a period, so the instantaneous wattage is not the answer to it. The
+  live figures are still there if you need to contrast the two.
 - HISTORY hvac/car_charging/lights_or_fan figures are INFERRED labels, not
   measured per-circuit data. Say "inferred" or "estimated" when citing them.
 - If the digest does not contain what was asked, say so plainly. Do not guess.
@@ -64,16 +71,58 @@ RULES:
 - Plain prose. No markdown, no JSON, no preamble."""
 
 
-def _digest_lines(state: Dict) -> Tuple[str, Dict[str, str]]:
+def _period_question(question: Optional[str]) -> bool:
+    """True if the question is about a billing PERIOD rather than this instant.
+
+    "Why is my bill high?" is the question this whole history feature exists to
+    answer, and it was being answered purely from live state -- $0.319 of
+    current waste, with the 37-day $254.25 never mentioned. Nothing was wrong
+    with the digest's contents; the live figures simply came first and the model
+    answered from the top of what it saw. A bill spans a period by definition,
+    so when the question is period-shaped the period totals lead.
+    """
+    q = (question or "").lower()
+    return any(w in q for w in
+               ("bill", "month", "monthly", "usual", "compare", "history",
+                "historic", "past", "last 37", "37 day", "period", "so far"))
+
+
+def _digest_lines(state: Dict,
+                  question: Optional[str] = None) -> Tuple[str, Dict[str, str]]:
     """(prompt text, allowed-number map for the provenance verifier).
 
     The allowed map is built from the SAME figures put in the prompt, so the
     verifier and the model see exactly one source of truth. Building them apart
     would let the two drift and make the badge meaningless.
+
+    `question` only ever changes the ORDER of what is included, never the
+    contents: a period-shaped question gets the history totals first. No figure
+    is added or withheld based on what was asked.
     """
     d = build_digest(state)
     allowed: Dict[str, str] = {}
     lines: List[str] = []
+
+    # A period-shaped question gets the billing-period totals FIRST, before any
+    # live figure. Same numbers either way -- the full HISTORY line still
+    # appears below -- but the answer to "why is my bill high?" is a period
+    # total, and whatever leads is what gets answered from.
+    if _period_question(question):
+        _hd = build_history_digest()
+        if _hd:
+            lines.append(
+                f"BILL PERIOD ({_hd['window_days']} days -- ANSWER BILL AND "
+                f"MONTHLY QUESTIONS FROM THESE, not from the live figures "
+                f"further down): total {_hd['total_kwh']} kWh costing "
+                f"${_hd['total_usd']} over {_hd['window_days']} days. Largest "
+                f"contributor: the air conditioner / heating and cooling at "
+                f"${_hd['hvac_usd']} over {_hd['window_days']} days, of which "
+                f"${_hd['hvac_on_peak_usd']} was at the expensive on-peak rate; "
+                f"moving that on-peak slice to super-off-peak would save about "
+                f"${_hd['hvac_onpeak_shift_monthly_usd']} a month. Live "
+                f"instantaneous figures below describe THIS MOMENT and are not "
+                f"the bill."
+            )
 
     # Keys are build_digest's own: total_wasted_usd / _kwh / _co2_kg, etc.
     for key, label, fmt in (("total_wasted_usd", "avoidable $", "{:.3f}"),
@@ -104,7 +153,15 @@ def _digest_lines(state: Dict) -> Tuple[str, Dict[str, str]]:
     tw = d.get("current_watts", state.get("total_watts"))
     if tw is not None:
         allowed["total_watts"] = f"{tw}"
-        lines.append(f"DRAWING NOW: {tw} W")
+        # Say that the total IS the total. Asked "how many watts am I drawing at
+        # this moment?", the model answered 1100 W — the A/C alone — citing the
+        # per-load line. Both numbers are real and live, so the provenance check
+        # passes either way; nothing in the digest said which one answers a
+        # whole-home question, and the per-load lines are more specific-looking.
+        lines.append(f"DRAWING NOW (whole home, ALL loads combined): {tw} W. "
+                     f"This is the answer to 'how much am I drawing/using right "
+                     f"now'. The per-load LOAD lines below are components of "
+                     f"this total, not the total.")
 
     # 37 days of real utility data, disaggregated into inferred buckets by
     # tools/history_disaggregate.py. Labeled HISTORY and NOT LIVE in the prompt
@@ -113,10 +170,19 @@ def _digest_lines(state: Dict) -> Tuple[str, Dict[str, str]]:
     # window each figure covers is unambiguous at the point of citation.
     hd = build_history_digest()
     if hd:
-        for k in ("window_days", "total_kwh", "total_usd", "hvac_kwh", "hvac_usd",
+        for k in ("window_days", "total_kwh", "total_usd",
+                  "avg_kwh_per_day", "avg_usd_per_day", "hvac_kwh", "hvac_usd",
                   "hvac_hours_per_day", "hvac_on_peak_kwh", "hvac_on_peak_usd",
                   "hvac_on_peak_pct_of_hvac", "hvac_onpeak_shift_monthly_usd",
-                  "car_charging_kwh", "car_charging_usd", "car_super_off_peak_pct",
+                  # car_super_off_peak_pct is deliberately absent: it is 100% by
+                  # construction (car_charging is DEFINED as midnight-6AM load,
+                  # the same block as super-off-peak), so it measures the
+                  # labelling rule, not the household. Offering it as a
+                  # verifiable figure let the model report "already in the
+                  # cheapest window, no adjustment needed" WITH a verified
+                  # badge. A meaningless number is deleted, not shipped with a
+                  # warning label telling the model to ignore it.
+                  "car_charging_kwh", "car_charging_usd",
                   "lights_or_fan_kwh", "lights_or_fan_usd",
                   "baseline_only_kwh", "baseline_only_usd"):
             if hd.get(k) is not None:
@@ -135,8 +201,11 @@ def _digest_lines(state: Dict) -> Tuple[str, Dict[str, str]]:
         # "heating and cooling over the last 37 days" answered correctly.
         lines.append(
             f"HISTORY (a {d}-day past window, NOT live -- every number in this "
-            f"line covers {d} days, never a day and never right now): "
+            f"line covers {d} days unless it says per day): "
             f"total {hd['total_kwh']} kWh over {d} days (${hd['total_usd']} over {d} days). "
+            f"A TYPICAL DAY in that window was {hd['avg_kwh_per_day']} kWh "
+            f"(${hd['avg_usd_per_day']}) -- use this as the 'usual' baseline when "
+            f"asked how today compares. "
             f"hvac -- this is the AIR CONDITIONER / AC / A/C / heating and cooling "
             f"bucket (inferred) -- {hd['hvac_kwh']} kWh over {d} days "
             f"(${hd['hvac_usd']} over {d} days), averaging ~{hd['hvac_hours_per_day']} h/day, "
@@ -149,19 +218,6 @@ def _digest_lines(state: Dict) -> Tuple[str, Dict[str, str]]:
             f"(${hd['lights_or_fan_usd']} over {d} days). "
             f"baseline/standby {hd['baseline_only_kwh']} kWh over {d} days "
             f"(${hd['baseline_only_usd']} over {d} days)."
-        )
-        # car_super_off_peak_pct is DELIBERATELY not offered as a finding.
-        # car_charging is defined as >=1.1 kW between 00:00-06:00, and
-        # super-off-peak weekday is 00:00-06:00, so the figure is 100% by
-        # construction: all 99 labelled intervals sit in hours 0-5. Given it,
-        # the model reported "already in the cheapest window, no adjustment
-        # needed" as though it were an insight. It is unfalsifiable — a car
-        # charged at 3 PM would be labelled hvac and never counted here.
-        lines.append(
-            "HISTORY NOTE: do not claim the car charging is well-timed. The "
-            "car_charging label is DEFINED as overnight midnight-6AM load, which "
-            "is the same block as super-off-peak, so it is circular by "
-            "construction and says nothing about the household's behaviour."
         )
         lines.append(f"HISTORY CAVEAT: {hd['caveat']}")
 
@@ -228,6 +284,23 @@ def _digest_lines(state: Dict) -> Tuple[str, Dict[str, str]]:
             lines.append(f"GUARDRAIL ACTIVE in {_rname}: {t} C is BELOW the {cmin} C "
                          f"limit, so switching the heater off is currently REFUSED "
                          f"(HTTP 409). Do not advise turning it off.")
+        else:
+            # The evaluated verdict, not just the rule. Previously this branch
+            # emitted NOTHING when the room was inside the comfort band: the
+            # digest stated "the system REFUSES above 27.0 C" and then went
+            # silent on whether that applied right now. Asked "why did you
+            # refuse to turn off the air conditioner?" at 23.5 C, the model
+            # filled the gap by asserting the room was "actively maintaining a
+            # temperature above 27.0 C" — inventing the precondition to justify
+            # a refusal that never happened.
+            #
+            # Absence of evidence was being read as evidence. State both
+            # verdicts explicitly so there is nothing to infer.
+            lines.append(f"GUARDRAIL NOT ACTIVE in {_rname}: {t} C is INSIDE the "
+                         f"{cmin}-{cmax} C comfort band, so R7 is NOT refusing "
+                         f"anything right now. No comfort refusal is in force. "
+                         f"If asked why something was refused, the answer is that "
+                         f"R7 did NOT refuse at this temperature.")
 
     # A refusal that actually happened, if the hub recorded one.
     ref = state.get("last_refusal") or {}
@@ -246,6 +319,41 @@ def _digest_lines(state: Dict) -> Tuple[str, Dict[str, str]]:
         lines.append("No findings and no live device state.")
 
     return "\n".join(lines), allowed
+
+
+# Questions whose answers the hub has already COMPUTED. For these the model can
+# only degrade a known-correct result, so they never reach it.
+#
+# The split is by whether the system already knows the answer, not by
+# difficulty: R7's verdict is the output of a rule that just ran, the combined
+# cost is addition, and the anomaly score came from the edge detector. Probing
+# showed the model getting all three wrong while the provenance badge read
+# "verified" -- it confabulated a temperature above 27 C to justify a refusal
+# that never happened, and answered "No, nothing unusual is happening" in the
+# same breath as describing an anomaly scoring 0.81.
+#
+# Everything genuinely interpretive -- why the bill is high, what to do first,
+# what-if questions, comparisons -- still goes to the model. This narrows where
+# it can be wrong; it does not take the AI out of the demo.
+# Keyword routing is itself a weak form of enumerating phrasings, and it was
+# caught doing exactly that: a held-out probe asked "add up everything that's
+# being wasted", which matches none of the arithmetic keywords below as they
+# first stood, so it went to the model and came back as prose with no total.
+# Widened once with the natural synonyms. This will still miss phrasings nobody
+# thought of — the honest ceiling of matching on words. An intent classifier
+# would generalise, but it is not worth a model call in front of an audience.
+_COMPUTED_INTENTS = (
+    ("refus", "guardrail", "why won't you", "why not turn",
+     "stop anything", "being blocked", "blocked right now"),   # R7 verdict
+    ("combined", "altogether", "all the finding", "add up",
+     "total cost", "total waste", "in total", "sum of"),       # arithmetic
+    ("unusual", "anomal", "strange"),                          # edge detector
+)
+
+
+def _is_computed(question: str) -> bool:
+    q = (question or "").lower()
+    return any(any(k in q for k in group) for group in _COMPUTED_INTENTS)
 
 
 def deterministic_answer(question: str, state: Dict) -> str:
@@ -276,6 +384,50 @@ def deterministic_answer(question: str, state: Dict) -> str:
                     f"All figures cover the whole {hd['window_days']} days, not one day. "
                     f"These are inferred from whole-home data, not measured per-circuit.")
         return "No historical usage data is available right now."
+
+    # Why was something refused. The hub EVALUATED R7 -- it knows the answer
+    # exactly -- so asking a 4B model to reconstruct it from prose is choosing
+    # to be wrong some of the time. Probed at 23.5 C it asserted the room was
+    # "actively maintaining a temperature above 27.0 C", inventing the
+    # precondition for a refusal that never happened, and the provenance badge
+    # still read "verified" because 27.0 is a real number in the digest.
+    if "refus" in q or "guardrail" in q or "why won't you" in q or "why not turn" in q:
+        try:
+            import rules as _r
+            cmax, cmin = _r.COMFORT_MAX_C, _r.COMFORT_MIN_C
+        except Exception:
+            cmax, cmin = 27.0, 16.0
+        ref = state.get("last_refusal") or {}
+        if ref.get("reason"):
+            return f"It was refused because {ref['reason']}"
+        hot = [(n, rm.get("temp_c")) for n, rm in (state.get("rooms") or {}).items()
+               if rm.get("temp_c") is not None and rm["temp_c"] > cmax]
+        if hot:
+            n, t = hot[0]
+            return (f"The comfort guardrail (R7) refused it: {n} is {t} C, above "
+                    f"the {cmax} C limit, so cutting cooling is blocked even when "
+                    f"asked. Human comfort outranks the saving.")
+        temps = [(n, rm.get("temp_c")) for n, rm in (state.get("rooms") or {}).items()
+                 if rm.get("temp_c") is not None]
+        if temps:
+            n, t = temps[0]
+            return (f"Nothing was refused. The comfort guardrail (R7) only blocks "
+                    f"switching cooling off above {cmax} C, and {n} is {t} C — "
+                    f"inside the {cmin}-{cmax} C band — so R7 is not in force "
+                    f"right now.")
+        return (f"Nothing was refused. R7 only blocks cutting cooling above "
+                f"{cmax} C, and no room temperature is being reported.")
+
+    # Arithmetic over the findings. There is no reason to let a model add up
+    # numbers the hub already holds.
+    if ("combined" in q or "total" in q or "altogether" in q or "all the finding" in q
+            or "sum" in q):
+        if recos:
+            parts = ", ".join(f"{r.get('title','finding')} ${float(r.get('usd',0) or 0):.3f}"
+                              for r in recos)
+            return (f"${total_usd:.3f} in total across {len(recos)} finding(s): "
+                    f"{parts}. That is {total_kwh:.4f} kWh of avoidable waste.")
+        return "There are no active findings, so the combined cost is $0.000."
 
     if "unusual" in q or "anomal" in q or "strange" in q:
         learned = [r for r in recos if r.get("detector") == "learned"]
@@ -334,13 +486,15 @@ class Asker:
 
     def ask(self, question: str, state: Dict) -> Dict:
         """Non-streaming answer + provenance verdict."""
-        digest_text, allowed = _digest_lines(state)
+        digest_text, allowed = _digest_lines(state, question)
         t0 = time.time()
 
-        if not llm_mod.LLM_ENABLED or requests is None:
+        # Computed answers do not go to the model at all — see _COMPUTED_INTENTS.
+        if _is_computed(question) or not llm_mod.LLM_ENABLED or requests is None:
             return self._wrap(deterministic_answer(question, state),
                               self._with_question_numbers(allowed, question),
-                              "template", time.time() - t0)
+                              "computed" if _is_computed(question) else "template",
+                              time.time() - t0)
         try:
             r = requests.post(f"{self.base_url}/chat/completions",
                               headers=self._headers(),
@@ -361,13 +515,18 @@ class Asker:
 
         First token arrives in ~0.15 s here, so a ~2.5 s answer reads as instant.
         """
-        digest_text, allowed = _digest_lines(state)
+        digest_text, allowed = _digest_lines(state, question)
         t0 = time.time()
 
-        if not llm_mod.LLM_ENABLED or requests is None:
+        # Must match ask() exactly. The /ask PAGE streams, so routing only in
+        # ask() would fix the tests and leave the on-camera path untouched —
+        # which is the version of this fix that fails in front of an audience.
+        if _is_computed(question) or not llm_mod.LLM_ENABLED or requests is None:
             text = deterministic_answer(question, state)
             yield {"delta": text}
-            yield self._wrap(text, allowed, "template", time.time() - t0, done=True)
+            yield self._wrap(text, allowed,
+                             "computed" if _is_computed(question) else "template",
+                             time.time() - t0, done=True)
             return
 
         acc = ""

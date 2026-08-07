@@ -120,6 +120,17 @@ def build_history_digest(force: bool = False) -> Dict:
         "window_days": days,
         "total_kwh": round(total_kwh, 2),
         "total_usd": round(total_usd, 2),
+        # A typical DAY, not just the window total. "How does today compare to
+        # my usual month?" is one of the suggested questions on the /ask page,
+        # and it was unanswerable: the digest offered a 37-day total and today
+        # is one day, so there was nothing to compare against. Probed, the model
+        # said so correctly and unhelpfully — "no monthly data or usual pattern
+        # is provided ... does not include a monthly baseline or average."
+        # It was right. Compute the baseline rather than expect it to be
+        # inferred from a total and a day count, which would also be arithmetic
+        # the prompt forbids.
+        "avg_kwh_per_day": round(total_kwh / days, 2) if days else None,
+        "avg_usd_per_day": round(total_usd / days, 2) if days else None,
         "hvac_kwh": round(kwh["hvac"], 2),
         "hvac_usd": round(usd["hvac"], 2),
         "hvac_events": events["hvac"],
