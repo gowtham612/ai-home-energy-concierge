@@ -5,37 +5,36 @@ Deployment & Accessibility 20 · Presentation & Documentation 15**. This script 
 weighted to match: the live loop and the measured numbers get the most time, and every
 claim in it is a figure this repo can reproduce.
 
-Speaking time ≈ **3:00** at a normal pace (~470 spoken words). Stage directions in
-brackets are not read aloud.
+Speaking time **2:58** at 150 wpm — 446 spoken words, leaving room for the demo pauses
+(five seconds of silence on the bulb, ~3.4 s while the answer streams). Stage directions
+in brackets are not read aloud.
 
 ---
 
 ## [0:00 – 0:20] The problem
 
-> Everyone's power bill went up this year. Almost nobody can tell you *which appliance*
-> did it. Your utility sends you one number, once a month, and by then the money is
-> already spent.
+> Everyone's power bill went up. Almost nobody can tell you *which appliance* did it.
+> Your utility sends one number a month, and by then the money is spent.
 >
-> This is a home energy concierge that runs **entirely on this desk** — no cloud, no
-> account, no data leaving the room. And it doesn't just tell you what happened. It
-> acts.
+> This is a home energy concierge that runs **entirely on this desk** — no cloud,
+> nothing leaving the room. And it doesn't just report. It acts.
 
 ## [0:20 – 0:40] What it is
 
 *[Point at the board, then the laptop, then the lamp.]*
 
-> An Arduino UNO Q senses the room. A Snapdragon X Elite reasons about it on the
-> Hexagon NPU. Real TP-Link devices carry out the decision.
+> An Arduino UNO Q senses the room. A Snapdragon X Elite reasons on the Hexagon NPU.
+> Real TP-Link devices carry out the decision.
 >
-> Sense, decide, physically act. Three tiers of AI — and choosing the *cheapest tier
-> that can do each job* is the whole design.
+> Sense, decide, physically act. Three tiers of AI — and picking the *cheapest tier that
+> can do each job* is the whole design.
 
 ## [0:40 – 2:00] The live loop
 
 *[Press **C** first, off-camera, to reach steady state.]*
 
-> Here's the house at steady state: lights on, HVAC on, someone home. Six-thirty in the
-> evening, on-peak — the most expensive electricity of the day.
+> The house at steady state: lights on, HVAC on, someone home. Six-thirty, on-peak —
+> the most expensive electricity of the day.
 
 *[Press **A**.]*
 
@@ -43,63 +42,60 @@ brackets are not read aloud.
 
 *[Bulb goes dark in about five seconds. Say nothing — let it land.]*
 
-> No one approved that. A deterministic rule fired in **fourteen microseconds** and
-> switched a real device. The model wasn't in the path — it explains afterwards, it
-> doesn't gate the action.
+> No one approved that. A rule fired in **fourteen microseconds** and switched a real
+> device. The model isn't in that path — it explains afterwards, it doesn't gate the
+> action.
 
 *[Open `/ask`, click **"Why is my bill high?"**]*
 
-> Now the interesting part. This is thirty-seven days of my **real utility data** —
-> fifteen-minute meter readings, real SDG&E time-of-use rates.
+> This is thirty-seven days of **real utility data** — fifteen-minute meter readings,
+> real SDG&E time-of-use rates.
 
 *[Answer streams in.]*
 
 > A hundred and fifty-seven kilowatt-hours on heating and cooling, fifteen dollars of it
-> at peak rate. That's a 4-billion-parameter model, running on the NPU, in this room.
-> And every number it just said is **checked against the source** before you see it —
-> that's the verified badge.
+> at peak. That's a 4-billion-parameter model on the NPU, in this room. And every number
+> it said is **checked against the source** — that's the verified badge.
 
 *[Turn the Modulino knob until the room reads 29 °C. Click **Approve** on the A/C card.]*
 
-> Now the room is twenty-nine degrees, and I'll approve its own recommendation to kill
-> the air conditioning.
+> The room is now twenty-nine degrees. I'll approve its own recommendation to kill the
+> air conditioning.
 
 *[409 refusal appears.]*
 
-> It refuses. Its own advice, blocked by a safety rule, because you'd be uncomfortable.
-> You can override it — *[point at the red button]* — and that gets recorded as a human
-> override, not as the system's idea.
+> It refuses. Its own advice, blocked because you'd be uncomfortable. You can override
+> it — and that's recorded as a *human* override, not the system's idea.
 
 ## [2:00 – 2:30] Technical implementation
 
-> Everything here is measured, not claimed. `benchmark.py` reproduces it.
+> Everything here is measured. `benchmark.py` reproduces it.
 >
-> Three tiers: a trained classifier at **30 microseconds** on the board's A53 — no
-> NumPy, pure Python. Deterministic rules at **fourteen microseconds**. The language
-> model at **3.3 seconds**, called *once per change of the finding set* — not per cycle.
+> Three tiers: a trained classifier at **30 microseconds** on the board's A53, pure
+> Python. Rules at **fourteen microseconds**. The model at **3.3 seconds**, called once
+> per *change* of the finding set — not per cycle.
 >
-> Edge filtering drops **88.7%** of broker traffic. The whole reasoning stack is
-> **34 megabytes** resident.
+> Edge filtering drops **88.7%** of broker traffic. The whole stack is **34 megabytes**
+> resident.
 >
-> And one thing we learned the hard way: on this NPU, latency tracks **output length**,
-> not model size. Capping the answer at 160 tokens is a performance decision, not a
-> style one.
+> And on this NPU, latency tracks **output length**, not model size. Capping answers at
+> 160 tokens is a performance decision, not a style one.
 
 ## [2:30 – 2:45] Deployment
 
-> One command starts it. No build step, no npm, no CDN — the dashboard is a single HTML
-> file. Scan a QR code and it's on your phone.
+> One command. No build step, no npm, no CDN — the dashboard is a single HTML file.
+> Scan a QR code and it's on your phone.
 >
-> It degrades honestly: kill the broker, kill the model, unplug the board — it keeps
-> running and *tells you* what it lost.
+> It degrades honestly: kill the broker, the model, or the board and it keeps running
+> and *tells you* what it lost.
 
 ## [2:45 – 3:00] Close
 
-> Two things I'd point at. The lamp and the plug are real, with real meters; their
-> magnitudes are scaled to a real household, and the dashboard says so on every row.
+> One thing I'll volunteer: the lamp and plug are real, with real meters, but their
+> magnitudes are scaled to a real household — the dashboard says so on every row.
 >
-> Thirty-two tests, every number traceable to a rule and a threshold. The provenance
-> check costs **110 microseconds** and it's the reason I'll show you a *verified* badge
+> Thirty-two tests. Every number traceable to a rule and a threshold. The provenance
+> check costs **110 microseconds**, and it's why I can show you a *verified* badge
 > instead of asking you to trust me.
 
 ---
