@@ -44,33 +44,42 @@ between automation and judgment.
 ## Architecture
 
 ```
-+------------------------------------+
-|  Arduino UNO Q                     |
-|  +--------------+ +--------------+ |
-|  | STM32U585    | | Dragonwing   | |  MQTT over Wi-Fi
-|  | Cortex-M33   | | QRB2210      | |----------------+
-|  | (Zephyr)     |>| Debian/Python| |                |
-|  | PIR/LDR/temp |<| MQTT client  | |<---- commands  |
-|  | SERVO/RELAY  | | edge filter  | |                |
-|  +--------------+ +--------------+ |                v
-+------------------------------------+   +----------------------------+
-                  ^                      | Copilot+ PC (Snapdragon    |
-                  | physical action      | X Elite, 45 TOPS NPU)      |
-                  |                      |        ORCHESTRATOR        |
-+------------------------------+         |                            |
-|  Galaxy S25 (Snapdragon      |         |  mosquitto broker          |
-|  8 Elite)                    |-------->|  FastAPI + WebSocket       |
-|  PWA: presence, geofence,    |         |  rules engine (determin.)  |
-|  notifications, APPROVE      |         |  energy model (determin.)  |
-+------------------------------+         |  GenieX LLM -- narration   |
-                                         |  R7 guardrail -- gates     |
-       +-----------------------+         |     physical action        |
-       | Qualcomm AI Cloud 100 |<--------|  deep report (off-path)    |
-       | weekly deep report    |         +-------------+--------------+
-       +-----------------------+                       | WebSocket
-                                                       v
-                                             Dark dashboard (browser)
++-----------------------------------------+
+|  Arduino UNO Q                          |   MQTT over USB
+|  +--------------+ +------------------+  |   (adb reverse tcp:11883)
+|  | STM32U585    | | Dragonwing       |  |------------------+
+|  | Cortex-M33   | | QRB2210          |  |                  |
+|  | sketch.ino   |>| Debian/Python    |  |<--- commands ----+
+|  | Modulino     |<| uno_q_publisher  |  |                  |
+|  | Knob+Buttons | | + python-kasa    |  |                  v
+|  +--------------+ +------------------+  |    +----------------------------+
++-----------------------------------------+    | Copilot+ PC (Snapdragon    |
+                    |  LAN / Wi-Fi              | X Elite, Hexagon NPU)      |
+                    v                           |        ORCHESTRATOR        |
+        +--------------------------+            |                            |
+        | Kasa KL120 bulb  lights  |            |  mosquitto broker          |
+        | Kasa HS110 plug  ac      |            |  FastAPI + WebSocket       |
+        |   <-- PHYSICAL ACTION    |            |  rules engine (determin.)  |
+        |   HS110 meters real W    |            |  energy model (determin.)  |
+        +--------------------------+            |  edge anomaly (logreg)     |
+                                                |  GenieX LLM -- narration   |
+        +--------------------------+            |  planner + provenance      |
+        | Galaxy S25               |----------->|  R7 guardrail -- gates     |
+        | /phone: feed + APPROVE   |            |     physical action        |
+        +--------------------------+            +-------------+--------------+
+                                                              | WebSocket
+                                                              v
+                                                    Dark dashboard (browser)
 ```
+
+Two things this diagram is deliberately precise about, because both have caused
+real debugging sessions:
+
+- **MQTT rides the USB cable, not Wi-Fi** — `adb reverse tcp:11883 tcp:1883`. Port
+  11883 and not 1883, because the board runs its own broker on 1883 and the tunnel
+  silently fails to bind there.
+- **Wi-Fi is still required**, but only so the *publisher* can reach the Kasa
+  devices on the LAN. Those are two separate paths, and either can fail alone.
 
 **Where each piece of intelligence lives, and why:**
 

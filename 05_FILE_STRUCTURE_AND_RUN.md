@@ -48,7 +48,7 @@ hackathon_energy_concierge/
     │   └── index.html              (646 ln) hub dashboard, no build step, no CDN
     │
     ├── phone/
-    │   └── index.html              (355 ln) phone PWA, no build step, no CDN
+    │   └── index.html              (355 ln) phone approval feed, no build step, no CDN
     │
     └── arduino/
         ├── sketch/sketch.ino       (218 ln) STM32 firmware: sensors + servo/relay actuator
@@ -479,7 +479,7 @@ auditability claim, demonstrated.
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/` | dashboard |
-| GET | `/phone` | phone PWA |
+| GET | `/phone` | phone approval feed (plain page, not a PWA) |
 | GET | `/api/state` | full fused snapshot + power history + realized totals |
 | GET | `/api/recos` | recent recommendations |
 | POST | `/api/presence` | `{"presence":"home"\|"away","distance_m":int}` |

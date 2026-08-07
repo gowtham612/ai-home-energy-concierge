@@ -1651,15 +1651,15 @@ hand-launched hub did it in five. Section 0.1 carries the same five values.
 
 ## 21.12 The confirmed pacing is now enforced, not just documented
 
-The five values in 21.11 lived only in the shell that launched the hub. Any restart —
-by a person, by `run_demo.ps1`, or on the other host — silently reverted to shipping
+The five values in 21.11 lived only in the shell that launched the hub. Any restart ï¿½
+by a person, by `run_demo.ps1`, or on the other host ï¿½ silently reverted to shipping
 defaults, and a hub with default pacing is **indistinguishable from a correct one**
 until you sit and watch beat 2 take ten minutes.
 
 `run_demo.ps1` was itself the trap: it set `DEMO_GRACE_S=20 DEMO_AWAY_GRACE_S=10` and
 left `AUTO_COOLDOWN_S`, `EVAL_INTERVAL_S` and `RESET_SETTLE_S` at their defaults. Filming
 through the launcher would have produced a twenty-second beat 2 while a hand-launched hub
-did it in five — with nothing on screen to explain the difference.
+did it in five ï¿½ with nothing on screen to explain the difference.
 
 Three changes:
 
@@ -1679,11 +1679,11 @@ Verified: `/api/pacing` returns the confirmed set, `run_demo.ps1` parses clean, 
 32/32.
 
 
-## 21.13 Stable URLs — use the .local name, not an IP
+## 21.13 Stable URLs ï¿½ use the .local name, not an IP
 
 The banner printed a single IP chosen by the "connect a UDP socket to 8.8.8.8 and see
 which local address the kernel picked" trick. That address is whichever interface holds
-the default route, and it changes every time the machine moves between work and home —
+the default route, and it changes every time the machine moves between work and home ï¿½
 **even when the SSID is the same**. Every bookmark, note and QR code made from it breaks.
 
 This box has five IPv4 adapters; four are `169.254.*` link-local autoconfig (adapters that
@@ -1700,18 +1700,55 @@ DESKTOP-BBAGVJC.local  ->  192.168.86.34   http 200
 | Dashboard | `http://DESKTOP-BBAGVJC.local:8000/` |
 | Ask (NPU Q&A) | `http://DESKTOP-BBAGVJC.local:8000/ask` |
 | Approve / HITL | `http://DESKTOP-BBAGVJC.local:8000/simulator` |
-| Phone PWA | `http://DESKTOP-BBAGVJC.local:8000/phone` |
+| Phone (approval feed) | `http://DESKTOP-BBAGVJC.local:8000/phone` |
 
 All four verified 200 over the name, as is `/api/pacing`.
 
 The banner now leads with these and lists real IPs only as a labelled fallback, with
-`169.254.*` filtered out. Windows answers mDNS natively — nothing to install.
+`169.254.*` filtered out. Windows answers mDNS natively ï¿½ nothing to install.
 
 **Caveat:** `.local` needs the client to speak mDNS. iOS and desktop browsers are
 reliable; Android has supported it since 12 but is the one to actually test before
 filming. If the phone cannot resolve it, fall back to the printed IP for that device
-only — and re-check it after any network change.
+only ï¿½ and re-check it after any network change.
 
 **Both devices must be on the same LAN.** mDNS does not cross subnets, so this does not
 help if the phone is on guest Wi-Fi and the PC is on the main network.
+
+
+## 21.14 GLOSSARY.md, and three docs that described things that do not exist
+
+Added **`GLOSSARY.md`** — every term the project uses, ordered by how data actually
+flows, with the common misreadings called out. Written because the vocabulary grew
+faster than the docs and there is now more than one machine working on this.
+
+Writing it surfaced three claims about **current reality** that were false. Corrected:
+
+**1. `/phone` is not a PWA.** `code/phone/index.html` has no manifest and no service
+worker, so it does not install and does not work offline. It is a plain mobile page —
+specifically the recommendation feed with Approve buttons. It is also **not** a sensor
+simulator; the sliders are on `/simulator`. The hub banner said "Phone PWA" in the one
+place a judge is most likely to look. Now "Phone", and `/simulator` is labelled
+"Sensors / Approve" rather than "Approve / HITL", which undersold what it does.
+
+**2. `code/README.md`'s architecture diagram was pre-pivot.** It still showed
+`PIR/LDR/temp` and `SERVO/RELAY` — breadboard hardware this project never had — plus a
+Qualcomm AI Cloud 100 box that was dropped in the architecture pivot, and "MQTT over
+Wi-Fi". Redrawn against what exists: Modulino Knob + Buttons, Kasa KL120/HS110 as the
+actuators, the edge anomaly tier, planner and provenance verifier.
+
+The redraw is explicit about the two separate network paths, because confusing them has
+cost real time: **MQTT rides the USB cable** (`adb reverse tcp:11883`), while **Wi-Fi is
+needed only so the publisher can reach the Kasa devices**. Either can fail alone.
+
+**3. `05_FILE_STRUCTURE_AND_RUN.md`** called `/phone` a PWA in both the file tree and the
+HTTP route table. Both corrected.
+
+Deliberately **not** changed: `00_MASTER_PLAN.md`, `01_LLM_PROMPT_PACK.md`,
+`04_ORGANIZER_REQUIREMENTS.md` and `08_HARDWARE_PIVOT_PLAN.md` still say PWA. Those are
+planning documents describing intended design at the time they were written, and
+rewriting history to match the outcome would be its own kind of dishonesty. Only
+documents that describe **what exists now** were corrected.
+
+Verified: smoke 32/32, `server.py` compiles, banner renders the corrected labels.
 

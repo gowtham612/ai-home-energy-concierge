@@ -599,8 +599,12 @@ def _banner() -> str:
     host = _mdns_host()
     ips = _lan_ips()
     base = f"http://{host}:{HTTP_PORT}"
+    # "Phone PWA" was wrong: code/phone/index.html has no manifest and no service
+    # worker, so it does not install and does not work offline. It is a plain
+    # mobile page. Calling it a PWA in the one place a judge is most likely to
+    # read is exactly the kind of claim this project does not make.
     pages = [("Dashboard", "/"), ("Ask (NPU Q&A)", "/ask"),
-             ("Approve / HITL", "/simulator"), ("Phone PWA", "/phone")]
+             ("Sensors / Approve", "/simulator"), ("Phone", "/phone")]
     rows = "\n".join(f"  {label:<15}{base}{path}" for label, path in pages)
     alt = "\n".join(f"                 http://{ip}:{HTTP_PORT}/" for ip in ips)
     return f"""
