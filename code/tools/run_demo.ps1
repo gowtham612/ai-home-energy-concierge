@@ -118,6 +118,12 @@ if ($askCode -ne 200 -or -not $pacingOk) {
     $env:DEMO_GRACE_S    = "1"; $env:DEMO_AWAY_GRACE_S = "1"
     $env:AUTO_COOLDOWN_S = "3"; $env:EVAL_INTERVAL_S   = "1"
     $env:RESET_SETTLE_S  = "3"
+    # Scale the demo props to the appliances they stand in for. The bulb and the
+    # 33 W fan are physically real but two orders of magnitude below the
+    # household in the history file, so unscaled they make every saving round to
+    # $0.00 and read as broken next to a 15 kWh/day billing period. Declared,
+    # never silent: the dashboard shows the factor and the measured watts.
+    $env:DEMO_SCALE_LOADS = "1"
     Start-Process $py -ArgumentList "hub\server.py" -WorkingDirectory $code -WindowStyle Hidden
     for ($i = 0; $i -lt 30; $i++) {
         Start-Sleep -Milliseconds 700

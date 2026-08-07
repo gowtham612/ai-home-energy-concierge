@@ -191,6 +191,10 @@
   .prov { font-weight: 600; letter-spacing: .02em; }
   .prov.real { color: #55c17a; }
   .prov.sim  { color: #8b98a9; }
+  /* A scaled prop is neither a meter reading nor a simulation. It must not be
+     readable as either, so it gets its own colour and always shows the real
+     measured figure beside the scaled one. */
+  .prov.prop { color: #d9a441; }
   .hidden { display: none; }
 
   .empty { color: var(--text-muted); font-size: 13px; padding: 22px 4px; }
@@ -351,8 +355,10 @@ function render() {
   // KPIs
   const w = s.total_watts ?? 0;
   document.getElementById("kpi-watts").innerHTML = `${Math.round(w)}<span class="unit">W</span>`;
+  const scaled = Object.values(s.loads ?? {}).some(l => l.watts_src === "scaled_prop");
   document.getElementById("kpi-watts-sub").textContent =
-    `≈ $${(w / 1000 * (s.tariff?.rate ?? 0)).toFixed(2)} per hour at the current rate`;
+    `≈ $${(w / 1000 * (s.tariff?.rate ?? 0)).toFixed(2)} per hour at the current rate`
+    + (scaled ? " · includes scaled stand-in loads" : "");
 
   const recos = s.recos ?? [];
   const applied = new Set(s.applied_ids ?? []);
@@ -519,9 +525,15 @@ function drawStateTable() {
   // pitch is "auditable, not magic", that is the one distinction that must not
   // be left to the reader's assumption.
   for (const [key, l] of Object.entries(STATE.loads ?? {})) {
-    const detail = l.metered
-      ? `<span class="prov real">real device</span> · measured`
-      : `<span class="prov sim">simulated</span> · modelled`;
+    // Three provenances, not two. A prop scaled to stand in for an appliance
+    // is not a meter reading and not a simulation: the shape is measured, the
+    // magnitude is declared. Show the factor and the real watts so a scaled
+    // number can never be mistaken for the device.
+    const detail = l.watts_src === "scaled_prop"
+      ? `<span class="prov prop">stand-in ×${l.watts_scale}</span> · ${l.watts_measured} W measured`
+      : (l.metered
+          ? `<span class="prov real">real device</span> · measured`
+          : `<span class="prov sim">simulated</span> · modelled`);
     rows.push(`<tr><td class="name">${key}</td><td>${l.state}</td>
       <td>${Math.round(l.watts ?? 0)} W</td><td>${detail}</td></tr>`);
   }

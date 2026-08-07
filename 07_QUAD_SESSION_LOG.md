@@ -1984,3 +1984,63 @@ worse risk than scanning a QR.
   wall switch. A smart bulb with no mains power is invisible to discovery. Check this
   first when `lights` binds as unreachable but `ac` is fine.
 
+
+---
+
+# 25. Scaled stand-in loads (2026-08-07)
+
+## 25.1 The problem
+
+The props are a 10.8 W bulb and a **33 W desk fan** on the plug labelled `ac`. The
+37-day history is a real household: **15.09 kWh/day**, HVAC averaging **1930 W** while
+running. Putting 33 W next to that reads as broken, and every saving computed from it
+rounded to **$0.00** — which is the "dollar figures too small" beat issue, traced to its
+actual cause.
+
+## 25.2 The approach, and why it is not a lie
+
+The props **stand in** for appliances, the way a scale model stands in for a building.
+Three rules keep that honest:
+
+1. **OFF by default.** Nothing scales unless `DEMO_SCALE_LOADS=1`. Shipping behaviour is
+   unchanged; smoke is 32/32 either way.
+2. **The measurement is never destroyed.** `watts_measured` keeps the real figure beside
+   the factor that was applied.
+3. **Labelled everywhere it is used.** `watts_src="scaled_prop"` in the state, and a
+   distinct amber `stand-in ×59.2 · 32.5 W measured` badge in the dashboard — its own
+   colour, not reusing "real device" or "simulated". A scaled number must never be
+   readable as a meter reading.
+
+It **multiplies rather than substitutes**, so the prop's real variation still shows: a
+fan spinning down is still a visible dip, it just lands in the right order of magnitude.
+
+## 25.3 The targets are derived, not invented
+
+| Load | Prop measures | Stands in for | Factor | Basis |
+|---|---|---|---|---|
+| `ac` | 32.6 W | **1930 W** | ×59.2 | mean HVAC power in the history (157.12 kWh over 81.4 h) |
+| `lights` | 10.8 W | **526 W** | ×48.7 | mean lights/fan power in the history (196.1 kWh over 372.5 h) |
+
+Both come from the history file itself, so the live view and the billing period describe
+**the same house** rather than two different ones. All four numbers are env-overridable
+(`DEMO_SCALE_AC_W`, `DEMO_PROP_AC_W`, and the `LIGHTS` equivalents) — re-measure the prop
+and change one variable if the hardware changes.
+
+## 25.4 Measured effect
+
+```
+living/ac   on   scaled 1924.1 W   measured 32.5 W   x59.2   src=scaled_prop
+total_watts 1924.1     ->   $0.75/hour at super-off-peak ($1.34 at on-peak)
+```
+
+$0.75/hour is legible on video. $0.042 was not. Enabled in `run_demo.ps1` so a demo run
+gets it automatically.
+
+## 25.5 Say it out loud on camera
+
+With scaling on, the watts on screen are **not** what the bulb and fan are drawing. The
+badge says so and the measured value is shown beside it, but the honest framing when
+presenting is "these props stand in for a real A/C and a room of lights; the meter
+readings are real, the magnitudes are scaled to a real household's from the utility
+data". Do not describe them as measured household load.
+

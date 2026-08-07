@@ -56,6 +56,73 @@ SIMULATOR_DIR = ROOT / "simulator"
 ASK_DIR = ROOT / "ask"
 
 
+# --------------------------------------------------------------------------
+# Prop scaling — declared stand-ins for appliances we do not physically have
+# --------------------------------------------------------------------------
+#
+# The demo props are a 10.8 W bulb and a 33 W desk fan on the plug labelled
+# "ac". The 37-day history is a real household: 15.09 kWh a day, HVAC averaging
+# 1930 W while running. Showing 33 W beside that reads as broken, and any saving
+# computed from it rounds to nothing — the findings were coming out at $0.00.
+#
+# So the props stand in for appliances, the way a scale model stands in for a
+# building. Three rules make that honest rather than a lie:
+#
+#   1. OFF by default. Nothing scales unless DEMO_SCALE_LOADS=1 is set.
+#   2. The measured value is never destroyed. It stays on the record as
+#      watts_measured, next to the factor that was applied.
+#   3. It is labelled at every point it is used — watts_src="scaled_prop" in the
+#      state, and a visible marker in the UI. A scaled figure must never be
+#      readable as a meter reading.
+#
+# The targets are not invented. They are the mean power each bucket actually
+# drew in the history file, so the live view and the billing period describe the
+# same house instead of two different ones.
+SCALE_LOADS = os.environ.get("DEMO_SCALE_LOADS", "0") == "1"
+
+# load suffix -> (target watts while ON, where the target came from)
+PROP_TARGETS = {
+    "ac": (float(os.environ.get("DEMO_SCALE_AC_W", "1930")),
+           "mean HVAC power in the 37-day history (157.12 kWh over 81.4 h)"),
+    "lights": (float(os.environ.get("DEMO_SCALE_LIGHTS_W", "526")),
+               "mean lights/fan power in the 37-day history (196.1 kWh over 372.5 h)"),
+}
+# Nominal draw of the actual prop, used to derive the factor. Measured, not
+# guessed: the fan reads ~32.6 W and the KL120 ~10.8 W at its demo brightness.
+PROP_NOMINAL_W = {
+    "ac": float(os.environ.get("DEMO_PROP_AC_W", "32.6")),
+    "lights": float(os.environ.get("DEMO_PROP_LIGHTS_W", "10.8")),
+}
+
+
+def _scale_prop(key: str, payload: Dict) -> Dict:
+    """Scale a prop's measured watts to the appliance it stands in for.
+
+    Multiplies rather than substitutes, so the prop's real variation still shows
+    through — a fan that spins down is still visible as a dip, it just lands in
+    the right order of magnitude.
+    """
+    if not SCALE_LOADS or "watts" not in payload:
+        return payload
+    name = key.rsplit("/", 1)[-1]
+    target, basis = PROP_TARGETS.get(name, (None, None))
+    nominal = PROP_NOMINAL_W.get(name)
+    if not target or not nominal:
+        return payload
+    try:
+        measured = float(payload.get("watts") or 0.0)
+    except (TypeError, ValueError):
+        return payload
+    factor = target / nominal
+    out = dict(payload)
+    out["watts_measured"] = round(measured, 2)
+    out["watts"] = round(measured * factor, 1)
+    out["watts_scale"] = round(factor, 1)
+    out["watts_src"] = "scaled_prop"
+    out["watts_basis"] = basis
+    return out
+
+
 class StateStore:
     """In-memory fused state. Thread-safe enough for our single writer."""
 
@@ -178,6 +245,7 @@ class StateStore:
 
     def update_load(self, key: str, payload: Dict) -> None:
         with self.lock:
+            payload = _scale_prop(key, payload)
             prev = self.loads.get(key, {})
             now = payload.get("ts", time.time())
             on_since = prev.get("on_since", now)
