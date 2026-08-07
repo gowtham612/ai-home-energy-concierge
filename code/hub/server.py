@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 import rules
-from llm import LLMClient, Recommendation
+from llm import LLMClient, Recommendation, LLM_BASE_URL
 
 try:
     import paho.mqtt.client as mqtt
@@ -558,7 +558,7 @@ def _banner() -> str:
   Dashboard : http://{ip}:{HTTP_PORT}/
   Phone     : http://{ip}:{HTTP_PORT}/phone      <- open this on the S25
   Broker    : {MQTT_HOST}:{MQTT_PORT}
-  LLM       : {os.environ.get('LLM_BASE_URL', 'http://localhost:8080/v1')}
+  LLM       : {LLM_BASE_URL}
               (LLM_ENABLED={os.environ.get('LLM_ENABLED', '1')})
 {'=' * 66}
 """
