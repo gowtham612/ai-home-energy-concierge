@@ -1563,3 +1563,73 @@ wrong paths makes a completely healthy system look dead.
 
 `smoke_test.py` has **zero** coverage of `uno_q_publisher.py`, so 21.1 is verified
 behaviourally, not by tests.
+
+## 21.11 Beat 2 latency: 9.6 s -> 0.6 s, by reordering the tick
+
+**Symptom:** pressing A took ~10 s to switch the bulb, while pressing C switched it
+instantly. The instinct that "this is not Kasa delay" was correct.
+
+**Measured hop by hop** with a passive MQTT probe on the PC broker (never poll Kasa
+directly for this — the firmware serves one connection at a time, and a second poller
+is what caused the flicker bug):
+
+```
+cue "presence away"      t+4.11s
+command lights->off      t+16.69s   <- 9.6 s after the finding was actionable
+kasa switched, ok=true   t+17.27s   <- 0.6 s
+```
+
+So the Kasa switch was never the problem. Two false leads were eliminated first:
+
+- **Not the grace period.** `DEMO_GRACE_S` was already dropped 6 -> 1 with no effect.
+- **Not R1's conditions.** Occupancy false, `unoccupied_s >= grace` and lights `"on"`
+  were all satisfied ~9 s before the command went out.
+
+**Root cause:** `evaluation_tick()` ran in the order
+
+```
+rules.evaluate()        0.014 ms
+planner.PLANNER.plan()  NPU call, seconds     <- AI_PLAN=1
+AUTO-ACT block          the command
+```
+
+The planner caches on the frozenset of finding ids, so it only calls the model when the
+finding set **changes** — which is exactly the tick where R1 first fires. The one tick
+that mattered paid the full model cost before it was allowed to switch a bulb.
+
+**Fix:** move the AUTO-ACT block **before** plan synthesis and narration. Nothing in it
+depends on the plan. Result:
+
+```
+cue "presence away"      t+4.11s
+command lights->off      t+4.13s    <- 20 ms
+kasa switched, ok=true   t+4.71s    <- 0.6 s
+```
+
+**Cue to bulb dark: 0.60 s.** Press-to-dark is about 1.7 s including the 1 Hz MCU
+telemetry hop — inside the 3 s target.
+
+This is also the honest shape of the three-tier story: the deterministic rule fires in
+microseconds and the model explains afterwards, rather than the explanation gating the
+action. **Do not reorder these back.**
+
+### Two measurement traps that produced wrong numbers first
+
+1. **A freshly restarted hub has no load state.** Loads publish on change only, so R1
+   cannot fire until the publisher's next **30 s** Kasa poll repopulates it. An early
+   measurement showed 6.2 s that was entirely this artifact. Always measure on a warm hub.
+2. **Button C's reset takes ~10 s** to finish its Kasa switching. Pressing A before it
+   settles measures the tail of the reset, not beat 2. Wait ~30 s after C.
+
+Current demo timings in use (shipping defaults untouched, all env-overridable):
+`DEMO_GRACE_S=1 DEMO_AWAY_GRACE_S=1 AUTO_COOLDOWN_S=3 EVAL_INTERVAL_S=1 RESET_SETTLE_S=3`
+
+### Also observed, unresolved
+
+- `[planner] PROVENANCE FAIL - numbers not in source: ['2400']` — the verifier caught
+  the model inventing a figure. Working as designed; good Beat 3 material.
+- Every reco reads **$0.00**. The HS110 "Space heater" plug is ON and metering correctly
+  but has **nothing plugged into it** (`power=0 W, current=0.0118 A` standby leakage), so
+  the only real load in the demo is the 10.8 W bulb. Plugging a real load in is the honest
+  fix for the "dollar figures too small" beat issue — a 1500 W heater turns $0.042 into
+  about **$1.05/hour** at the on-peak rate, genuinely measured rather than scaled.

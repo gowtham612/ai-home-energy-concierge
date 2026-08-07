@@ -411,18 +411,20 @@ def evaluation_tick() -> List[Recommendation]:
         print(f"[eval] rules failed: {exc}")
         return []
 
-    # TIER 2: one plan-synthesis call per CHANGE of the finding set (the planner
-    # caches on frozenset of ids), not per cycle and not per finding. Strictly
-    # cheaper than the per-finding narration below, which is left completely
-    # intact underneath as the fallback.
-    if os.environ.get("AI_PLAN", "0") == "1":
-        try:
-            import planner
-            STORE.plan = planner.PLANNER.plan(findings).to_dict()
-        except Exception as exc:
-            print(f"[eval] planner unavailable: {exc}")
-
     # --- AUTO-ACT on low-risk loads (AI_AUTO_LIGHTS=1) -----------------------
+    # ORDER IS LOAD-BEARING: this runs BEFORE plan synthesis and narration.
+    #
+    # Both of those make model calls measured in seconds. The planner caches on
+    # the frozenset of finding ids, so it only calls out when the finding set
+    # CHANGES — which is precisely the tick where R1 first fires. Running the
+    # actuation after it meant the one tick that mattered paid the full model
+    # cost before it was allowed to switch a bulb: measured ~9.6 s from "room is
+    # empty" to the command, against a Kasa switch that takes 0.6 s.
+    #
+    # The decision does not depend on the plan. Acting first is also the honest
+    # shape of the three-tier story — the deterministic rule fires in
+    # microseconds and the model explains afterwards, rather than the
+    # explanation gating the action.
     # Beat 2 of the demo: the UNO Q detects an empty room and the lights go off
     # by themselves, while the A/C still waits for a human. That split is the
     # point — autonomy is granted per-load by RISK, not granted wholesale.
@@ -470,6 +472,18 @@ def evaluation_tick() -> List[Recommendation]:
                           f"no human in the loop by design)")
                 except Exception as exc:
                     print(f"[auto] publish failed: {exc}")
+
+    # TIER 2: one plan-synthesis call per CHANGE of the finding set (the planner
+    # caches on frozenset of ids), not per cycle and not per finding. Strictly
+    # cheaper than the per-finding narration below, which is left completely
+    # intact underneath as the fallback. Runs after the actuation above — see
+    # the note there.
+    if os.environ.get("AI_PLAN", "0") == "1":
+        try:
+            import planner
+            STORE.plan = planner.PLANNER.plan(findings).to_dict()
+        except Exception as exc:
+            print(f"[eval] planner unavailable: {exc}")
 
     fresh: List[Recommendation] = []
     now = time.time()
