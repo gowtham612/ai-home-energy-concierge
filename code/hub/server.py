@@ -42,7 +42,9 @@ HTTP_PORT = int(os.environ.get("HTTP_PORT", "8000"))
 # Room a board-side cue applies to. Single-room demo; named, not inlined.
 ROOM_DEFAULT = os.environ.get("ROOM", "living")
 
-EVAL_INTERVAL_S = 5
+# Env-overridable so a live demo is not waiting on a 5 s tick after every
+# button press. Deployment default unchanged.
+EVAL_INTERVAL_S = float(os.environ.get("EVAL_INTERVAL_S", "5"))
 RECO_COOLDOWN_S = 600      # do not re-narrate the same finding for 10 min — anti-spam
 POWER_HISTORY_LEN = 60     # 5 min of 5 s samples for the sparkline
 
@@ -267,6 +269,13 @@ STORE = StateStore()
 # the dashboard. A demo has to be repeatable without restarting the server.
 AUTO_ACTED: Dict[str, float] = {}
 AUTO_COOLDOWN_S = float(os.environ.get("AUTO_COOLDOWN_S", "30"))
+# Button C sets the scene in several steps - clear findings, presence home,
+# occupancy true, lux, then switch both devices back on. With a short grace and
+# a fast eval tick the rules can fire in the gap BEFORE occupancy has
+# propagated, so the lights get auto-killed a second after the reset turned
+# them on. Hold auto-actuation off while the scene settles.
+RESET_SETTLE_S = float(os.environ.get("RESET_SETTLE_S", "12"))
+LAST_RESET_AT = 0.0
 LLM = LLMClient()
 app = FastAPI(title="AI Home Energy Concierge")
 CLIENTS: List[WebSocket] = []
@@ -312,7 +321,19 @@ def on_message(client, userdata, msg):
             # same cue path the autopilot uses, so a physical press and a scripted
             # one move the simulator's controls identically.
             control = str(payload.get("control", ""))
-            if control in ("presence", "occupancy", "lux", "humidity", "temp_c", "ask"):
+            if control == "reset":
+                # Findings are append-only history, so after a reset the
+                # dashboard still listed "lights on in an empty room" with the
+                # room occupied and the lights on. Stale on camera.
+                with STORE.lock:
+                    STORE.recos.clear(); STORE.last_narrated.clear()
+                    STORE.applied_ids.clear(); STORE.realized.clear()
+                    STORE.actuations.clear(); STORE.plan = {}
+                AUTO_ACTED.clear()
+                global LAST_RESET_AT
+                LAST_RESET_AT = time.time()
+                print("[demo] reset: findings cleared")
+            elif control in ("presence", "occupancy", "lux", "humidity", "temp_c", "ask"):
                 value = payload.get("value")
                 with STORE.lock:
                     STORE._demo_cue_seq += 1
@@ -415,7 +436,8 @@ def evaluation_tick() -> List[Recommendation]:
     #     pressed something.
     # If you enable this, say so on stage. "A human approves every action" stops
     # being true the moment it is on.
-    if os.environ.get("AI_AUTO_LIGHTS", "0") == "1":
+    if (os.environ.get("AI_AUTO_LIGHTS", "0") == "1"
+            and time.time() - LAST_RESET_AT > RESET_SETTLE_S):
         for f in findings:
             if f.load_key.rsplit("/", 1)[-1] != "lights":
                 continue

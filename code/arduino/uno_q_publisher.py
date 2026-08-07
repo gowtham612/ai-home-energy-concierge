@@ -826,6 +826,12 @@ class ButtonWatch:
         set the scene by hand, which is how takes drift.
         """
         ok = True
+        # Reset TWICE: once now to clear findings and hold auto-actuation while
+        # the scene is set, once at the end to restart that hold with everything
+        # actually in place. Sending it only first burned the whole window on the
+        # ~10 s of Kasa switching below; only last left the lights exposed during
+        # those same 10 s. Both, and the window means what it says.
+        ok &= self._cue("reset", True, "button C: clear findings")
         ok &= self._cue("presence", "home", "button C: reset")
         ok &= self._cue("occupancy", True, "button C: reset")
         ok &= self._cue("lux", 60, "button C: reset")
@@ -837,6 +843,11 @@ class ButtonWatch:
                 res_ok, source, _w = self.bank.switch(load, "on")
                 print(f"[button] C: {load} -> on ok={res_ok} source={source}", flush=True)
                 ok &= bool(res_ok)
+        # Reset cue LAST. It clears findings and starts the hub's settle timer,
+        # and the two Kasa switches above take ~10 s - sending it first burned
+        # almost the whole settle window before the lights were even on, so the
+        # rules fired the moment it expired and killed them again.
+        ok &= self._cue("reset", True, "button C: clear findings")
         return ok
 
 

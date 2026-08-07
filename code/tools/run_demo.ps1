@@ -70,6 +70,36 @@ Get-CimInstance Win32_Process |
     ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
 Start-Sleep -Milliseconds 1200
 
+# --- make sure the hub is running WITH the demo flags ------------------------
+# They default OFF, so a hub started any other way - including one restarted to
+# run the smoke test at shipping defaults - silently has no /ask page, no
+# planner and no autonomous lights. That failure looks exactly like a broken
+# demo: the buttons work, the simulator updates, and nothing happens. Check the
+# running process rather than trusting whoever started it.
+$askCode = try { (Invoke-WebRequest -Uri "$hub/ask" -UseBasicParsing -TimeoutSec 5).StatusCode } catch { 0 }
+if ($askCode -ne 200) {
+    Write-Host "  hub is not running with the demo flags - restarting it" -ForegroundColor DarkYellow
+    Get-CimInstance Win32_Process |
+        Where-Object { $_.CommandLine -like '*hub/server.py*' } |
+        ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+    Start-Sleep -Seconds 3
+    $py = Join-Path $code ".venv\Scripts\python.exe"
+    if (-not (Test-Path $py)) { $py = "python" }
+    $env:AI_ASK = "1"; $env:AI_PLAN = "1"; $env:AI_ANOMALY = "1"
+    $env:AI_AUTO_LIGHTS = "1"
+    # Shortened so a live press-the-button demo does not wait 10 minutes. This
+    # is a real threshold change; do not put the shortened number on screen.
+    $env:DEMO_GRACE_S = "20"; $env:DEMO_AWAY_GRACE_S = "10"
+    Start-Process $py -ArgumentList "hub\server.py" -WorkingDirectory $code -WindowStyle Hidden
+    for ($i = 0; $i -lt 30; $i++) {
+        Start-Sleep -Milliseconds 700
+        try { if ((Invoke-WebRequest -Uri "$hub/ask" -UseBasicParsing -TimeoutSec 3).StatusCode -eq 200) { break } } catch {}
+    }
+}
+$askCode = try { (Invoke-WebRequest -Uri "$hub/ask" -UseBasicParsing -TimeoutSec 5).StatusCode } catch { 0 }
+if ($askCode -eq 200) { Write-Host "  hub up with AI_ASK / AI_PLAN / AI_ANOMALY / AI_AUTO_LIGHTS" -ForegroundColor Green }
+else { Write-Host "  WARNING: /ask still not answering - the AI beats will not work" -ForegroundColor Red }
+
 # --- browsers ---------------------------------------------------------------
 if (-not $NoBrowser) {
     $browser = @(
