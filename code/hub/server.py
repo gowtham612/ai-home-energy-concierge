@@ -563,18 +563,61 @@ def _lan_ip() -> str:
         return "127.0.0.1"
 
 
+def _mdns_host() -> str:
+    """The .local name, which does NOT change when the network does.
+
+    An IP printed at startup is stale the moment you move between work Wi-Fi and
+    home Wi-Fi — same SSID or not — and every bookmark, QR code and note made
+    from it breaks. The mDNS name is resolved on the local link, so it follows
+    the machine across networks. Verified resolving from the UNO Q.
+    """
+    name = socket.gethostname().split(".")[0]
+    return f"{name}.local"
+
+
+def _lan_ips() -> List[str]:
+    """Every usable IPv4 address, best guess first.
+
+    Printing only one is what makes this confusing on a box with five adapters:
+    the address with the default route is not necessarily the one a phone on the
+    LAN can reach. 169.254.* is link-local autoconfig — an adapter that failed to
+    get a lease — and is never the right answer, so it is filtered out.
+    """
+    primary = _lan_ip()
+    out = [primary] if not primary.startswith(("127.", "169.254.")) else []
+    try:
+        for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+            ip = info[4][0]
+            if ip not in out and not ip.startswith(("127.", "169.254.")):
+                out.append(ip)
+    except Exception:
+        pass
+    return out or ["127.0.0.1"]
+
+
 def _banner() -> str:
-    ip = _lan_ip()
+    host = _mdns_host()
+    ips = _lan_ips()
+    base = f"http://{host}:{HTTP_PORT}"
+    pages = [("Dashboard", "/"), ("Ask (NPU Q&A)", "/ask"),
+             ("Approve / HITL", "/simulator"), ("Phone PWA", "/phone")]
+    rows = "\n".join(f"  {label:<15}{base}{path}" for label, path in pages)
+    alt = "\n".join(f"                 http://{ip}:{HTTP_PORT}/" for ip in ips)
     return f"""
-{'=' * 66}
+{'=' * 72}
   AI HOME ENERGY CONCIERGE — hub running
-{'=' * 66}
-  Dashboard : http://{ip}:{HTTP_PORT}/
-  Phone     : http://{ip}:{HTTP_PORT}/phone      <- open this on the S25
+{'=' * 72}
+  These URLs do NOT change when you move between networks — bookmark them:
+
+{rows}
+
+  If a device cannot resolve .local, use an address instead (these DO change):
+{alt}
+
   Broker    : {MQTT_HOST}:{MQTT_PORT}
   LLM       : {LLM_BASE_URL}
               (LLM_ENABLED={os.environ.get('LLM_ENABLED', '1')})
-{'=' * 66}
+{'=' * 72}
 """
 
 

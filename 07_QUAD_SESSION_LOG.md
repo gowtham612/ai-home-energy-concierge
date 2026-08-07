@@ -1678,3 +1678,40 @@ Three changes:
 Verified: `/api/pacing` returns the confirmed set, `run_demo.ps1` parses clean, smoke
 32/32.
 
+
+## 21.13 Stable URLs — use the .local name, not an IP
+
+The banner printed a single IP chosen by the "connect a UDP socket to 8.8.8.8 and see
+which local address the kernel picked" trick. That address is whichever interface holds
+the default route, and it changes every time the machine moves between work and home —
+**even when the SSID is the same**. Every bookmark, note and QR code made from it breaks.
+
+This box has five IPv4 adapters; four are `169.254.*` link-local autoconfig (adapters that
+never got a lease) and are never the right answer.
+
+**Use mDNS.** Verified resolving and serving from the UNO Q on the same LAN:
+
+```
+DESKTOP-BBAGVJC.local  ->  192.168.86.34   http 200
+```
+
+| Page | Stable URL |
+|---|---|
+| Dashboard | `http://DESKTOP-BBAGVJC.local:8000/` |
+| Ask (NPU Q&A) | `http://DESKTOP-BBAGVJC.local:8000/ask` |
+| Approve / HITL | `http://DESKTOP-BBAGVJC.local:8000/simulator` |
+| Phone PWA | `http://DESKTOP-BBAGVJC.local:8000/phone` |
+
+All four verified 200 over the name, as is `/api/pacing`.
+
+The banner now leads with these and lists real IPs only as a labelled fallback, with
+`169.254.*` filtered out. Windows answers mDNS natively — nothing to install.
+
+**Caveat:** `.local` needs the client to speak mDNS. iOS and desktop browsers are
+reliable; Android has supported it since 12 but is the one to actually test before
+filming. If the phone cannot resolve it, fall back to the printed IP for that device
+only — and re-check it after any network change.
+
+**Both devices must be on the same LAN.** mDNS does not cross subnets, so this does not
+help if the phone is on guest Wi-Fi and the PC is on the main network.
+
