@@ -20,3 +20,9 @@ python-kasa>=0.10
 # Optional: live RSS/CPU sampling in hub/benchmark.py. Without it the
 # benchmark still runs and simply reports Peak RSS as unavailable.
 psutil>=5.9
+
+# QR codes for /qr, so a phone never has to type the PC's IP. Pure Python, no
+# dependencies, renders inline SVG server-side — works on a network with no
+# internet, which is the situation it exists for. Optional: /qr degrades to a
+# plain list of URLs if it is missing.
+segno>=1.6

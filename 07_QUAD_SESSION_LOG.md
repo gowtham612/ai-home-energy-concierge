@@ -1931,3 +1931,56 @@ person. It simply cannot move a switch by itself.
 
 Beat 2 is unchanged - it demonstrates R1, which is exactly the rule still permitted to act.
 
+
+---
+
+# 24. Reaching the hub from a phone (2026-08-07)
+
+## 24.1 The .local name does not work on Android — and cannot be made to
+
+Section 21.13 recommended `http://DESKTOP-BBAGVJC.local:8000` as the address that
+survives moving between networks. It resolves on **iPhone, Mac, Windows and the UNO Q**,
+and it does **not** resolve on Android, which has no system mDNS resolver behind the
+normal DNS path. Chrome on Android cannot look it up, and no setting changes that.
+
+So on Android there is no hostname to type. The IP works, and the IP changes with the
+network — which is the original complaint.
+
+## 24.2 `/qr` — stop typing the address
+
+New page: **`http://<pc>:8000/qr`**. Open it on the PC, scan from the phone. It renders a
+QR per page (Phone, Simulator, Dashboard, Ask) built from whatever the PC's LAN address
+is *at that moment*, so the address changing stops mattering — nobody reads it, types it,
+or has to notice it changed.
+
+Rendered server-side with **segno** (pure Python, no dependencies, inline SVG), so it
+works on a network with no internet, which is the situation it exists for. If segno is
+missing the page degrades to a plain list of URLs.
+
+Added to `requirements.txt`. The startup banner now points at `/qr` and states the
+Android limitation rather than recommending a name that will not work there.
+
+**Do not bookmark the QR's target on the phone** — a bookmark made at the office will not
+open at home. Re-open `/qr` and scan again after switching networks.
+
+## 24.3 What would give ONE permanent address
+
+`/qr` removes the pain but does not give a single fixed address. Only two things do:
+
+| Option | Gives | Cost |
+|---|---|---|
+| **Tailscale / ZeroTier** | one name + IP that works on ANY network, including cellular | install on PC + phone, one sign-in; neither is installed today |
+| **DHCP reservation per router** | a stable IP *per network* — still two different addresses | router admin access on both |
+
+A mesh VPN is the only real answer to "irrespective of which ArtiFi". It was **not**
+installed, on the grounds that adding a network dependency the day before filming is a
+worse risk than scanning a QR.
+
+## 24.4 Also
+
+- Banner column widened from 15 to 18: "Sensors / Approve" is 17 characters and was
+  colliding with the URL beside it.
+- `Bedroom light 2` had dropped off the LAN again while the heater stayed — the bulb's
+  wall switch. A smart bulb with no mains power is invisible to discovery. Check this
+  first when `lights` binds as unreachable but `ac` is fine.
+

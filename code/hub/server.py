@@ -33,7 +33,8 @@ except ImportError:
     mqtt = None
 
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import (FileResponse, HTMLResponse, JSONResponse,
+                               StreamingResponse)
 from fastapi.staticfiles import StaticFiles
 
 MQTT_HOST = os.environ.get("MQTT_HOST", "localhost")
@@ -641,7 +642,12 @@ def _banner() -> str:
 
 {rows}
 
-  If a device cannot resolve .local, use an address instead (these DO change):
+  ANDROID cannot resolve .local — it has no system mDNS resolver. For a phone,
+  open this on the PC and scan; nothing to type, and it follows the network:
+
+     http://{host}:{HTTP_PORT}/qr        <- scan from the phone
+
+  Or use an address directly (these DO change with the network):
 {alt}
 
   Broker    : {MQTT_HOST}:{MQTT_PORT}
@@ -755,6 +761,78 @@ async def simulator():
 @app.get("/api/state")
 async def api_state():
     return JSONResponse(STORE.public_state())
+
+
+@app.get("/qr")
+async def qr_page():
+    """Scannable links to every page, using the CURRENT LAN address.
+
+    The .local name this hub prints does not work on Android: unlike iOS, macOS,
+    Windows and avahi, Android has no system mDNS resolver behind the normal DNS
+    path, so Chrome cannot look it up. There is therefore no hostname that can be
+    typed on an Android phone, and the IP is the only thing that works — but the
+    IP changes with the network, which is what made it painful in the first
+    place.
+
+    A QR sidesteps the whole problem: the address can change every day and
+    nobody has to read it, type it, or notice that it changed. Open this page on
+    the PC and scan from the phone.
+
+    Rendered server-side with segno (pure Python, no JS, no CDN) so it works on
+    a network with no internet — which is the situation this is for.
+    """
+    ips = _lan_ips()
+    ip = ips[0]
+    pages = [("Phone", "/phone", "the approval feed — scan this one"),
+             ("Simulator", "/simulator", "sensors + approve"),
+             ("Dashboard", "/", "live power and findings"),
+             ("Ask", "/ask", "natural-language Q&A")]
+    try:
+        import segno
+    except ImportError:
+        return HTMLResponse(
+            "<h1>QR unavailable</h1><p><code>pip install segno</code> "
+            f"(pure Python, no deps).</p><p>Meanwhile, type: "
+            + "".join(f"<br><code>http://{ip}:{HTTP_PORT}{p}</code>" for _, p, _ in pages)
+            + "</p>", status_code=200)
+
+    cards = []
+    for label, path, note in pages:
+        url = f"http://{ip}:{HTTP_PORT}{path}"
+        svg = segno.make(url, error="m").svg_inline(scale=5, dark="#111")
+        cards.append(
+            f'<div class="c"><h2>{label}</h2><div class="n">{note}</div>'
+            f'{svg}<div class="u">{url}</div></div>')
+
+    others = "".join(f"<li><code>http://{o}:{HTTP_PORT}/phone</code></li>"
+                     for o in ips[1:]) or "<li>none</li>"
+    return HTMLResponse(f"""<!doctype html><meta charset="utf-8">
+<title>Scan to open on your phone</title>
+<style>
+ body{{font:15px system-ui,sans-serif;background:#0f1115;color:#e8e8ea;margin:0;padding:28px}}
+ h1{{font-size:20px;margin:0 0 4px}} .sub{{color:#9aa0aa;margin-bottom:22px}}
+ .g{{display:flex;flex-wrap:wrap;gap:20px}}
+ .c{{background:#fff;color:#111;border-radius:12px;padding:16px;text-align:center;width:230px}}
+ .c h2{{font-size:15px;margin:0 0 2px}} .n{{font-size:11px;color:#666;margin-bottom:8px}}
+ .u{{font-size:10px;color:#444;margin-top:8px;word-break:break-all}}
+ .warn{{margin-top:26px;padding:12px 14px;background:#241c10;border-left:3px solid #b8860b;
+        color:#e0d3b8;font-size:13px;max-width:760px;line-height:1.5}}
+ code{{background:#1b1e24;padding:1px 5px;border-radius:4px;color:#cfd4dc}}
+</style>
+<h1>Scan to open on your phone</h1>
+<div class="sub">This PC is <code>{ip}</code> right now. Scan and the address is
+whatever it currently is — nothing to type, nothing to remember.</div>
+<div class="g">{''.join(cards)}</div>
+<div class="warn">
+<b>Do not bookmark these on the phone.</b> The IP is assigned by whichever
+network you are on, so a bookmark made at the office will not open at home.
+Re-open <code>/qr</code> on the PC and scan again after switching networks.<br><br>
+<b>The <code>.local</code> name will not work on Android</b> — it has no system
+mDNS resolver. It does work on iPhone, Mac, Windows and the UNO Q.<br><br>
+Other addresses this PC has: <ul>{others}</ul>
+Phone and PC must be on the <b>same network</b>, and guest Wi-Fi usually blocks
+device-to-device traffic entirely.
+</div>""")
 
 
 @app.get("/api/pacing")
