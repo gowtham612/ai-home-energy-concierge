@@ -882,6 +882,46 @@ class ButtonWatch:
         # even though it worked. CMD is about loads and cannot serve here.
         mcu_send(f"BTNACK {key[-1]} {'ok' if ok else 'fail'}\n")
 
+    def _pin_demo_clock(self) -> bool:
+        """Pin the demo to a fixed wall-clock time, so a take is reproducible.
+
+        Filmed at 00:38 the dashboard showed "Unusual pattern for this home — ac
+        running at 00:38". That is the edge detector doing its job: an A/C on
+        after midnight IS its motivating case. But it makes the demo depend on
+        when you press record — rehearse at 11am and it never appears, film at
+        midnight and it derails beat 2 with a finding nobody asked about.
+
+        The hour also sets the RATE, so an unpinned clock silently changes every
+        dollar on screen. 18:30 is on-peak ($0.69654/kWh) rather than the
+        super-off-peak $0.38818 a late-night or late-morning take would get: the
+        same waste reads nearly twice as expensive, and "cooling an empty home
+        during peak hours" is the story the findings are written around.
+
+        Everything downstream already honours this — rules, the tariff, the
+        anomaly features and the finding titles all read snapshot["now"], which
+        carries the offset. Nothing else had to change.
+
+        DEMO_CLOCK_HHMM="" disables pinning and uses real time.
+        """
+        want = os.environ.get("DEMO_CLOCK_HHMM", "18:30").strip()
+        if not want:
+            return True
+        try:
+            # Send the WALL TIME wanted, never a computed offset. This board runs
+            # UTC and the hub runs local, so an offset computed here landed the
+            # demo seven hours out — 18:30 became 11:30, which quietly swapped
+            # on-peak for super-off-peak and halved every figure on screen. The
+            # hub renders the clock, so the hub resolves it.
+            int(want.split(":", 1)[0]), int(want.split(":", 1)[1])   # validate
+            self.pub.c.publish("home/context/clock",
+                               json.dumps({"pin_hhmm": want}))
+            print(f"[button] demo clock -> pin {want} (hub resolves it locally)",
+                  flush=True)
+            return True
+        except Exception as exc:
+            print(f"[button] clock pin failed: {exc}", flush=True)
+            return False
+
     def _cue(self, control: str, value, note: str) -> bool:
         """Ask the simulator page to move one of its own controls."""
         try:
@@ -901,6 +941,7 @@ class ButtonWatch:
         set the scene by hand, which is how takes drift.
         """
         ok = True
+        ok &= self._pin_demo_clock()
         # Reset TWICE: once now to clear findings and hold auto-actuation while
         # the scene is set, once at the end to restart that hold with everything
         # actually in place. Sending it only first burned the whole window on the

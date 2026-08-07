@@ -2096,3 +2096,79 @@ measured) � the fan had not stopped yet. It is a real reading, corrects on the n
 4 s later, and never reaches `total_watts`, which sums only loads whose state is `on`.
 Left alone rather than clamped, because clamping would hide a genuine measurement.
 
+
+---
+
+# 27. The demo no longer depends on when you press record (2026-08-07)
+
+Filmed at 00:38 the dashboard showed *"Unusual pattern for this home — ac running at
+00:38. Estimated cost so far: $0.00."* Two unrelated problems in one line.
+
+## 27.1 The anomaly finding was correct and unwanted
+
+An A/C running after midnight IS the edge detector's motivating case (`anomaly.py:240`) —
+the scenario no deterministic rule catches. It fires because the clock terms tip an
+occupied evening over the threshold past ~22:00. Nothing is broken.
+
+But it makes the demo depend on the hour you record: rehearse at 11am and the finding
+never appears, film at midnight and it derails beat 2 with something nobody asked about.
+The hour also sets the RATE, so an unpinned clock silently changes every dollar on
+screen.
+
+**Button C now pins the virtual clock.** All the machinery already existed —
+`sim_clock_offset`, applied in `snapshot["now"]`, which rules, the tariff, the anomaly
+features and the finding titles all read. Nothing downstream changed.
+
+Default **18:30**, set by `DEMO_CLOCK_HHMM` (empty string = real time).
+
+**Why 18:30 and not 11:00.** 18:30 is **on-peak, $0.69654/kWh**. 11:00 falls in the
+weekday super-off-peak block (10:00–14:00) at **$0.38818** — the cheapest rate of the
+day, which would nearly halve every figure. "Cooling an empty home during peak hours" is
+also the story the findings are written around, and it is only true on-peak.
+
+## 27.2 Timezone bug found while testing
+
+First attempt computed the offset on the BOARD and sent `offset_s`. The board runs UTC,
+the hub runs local: asking for 18:30 produced **11:30**, seven hours out, silently
+swapping on-peak for super-off-peak.
+
+The publisher now sends `{"pin_hhmm": "18:30"}` and the **hub** resolves it against its
+own local time. Whoever renders the clock owns the conversion. `offset_s` still works for
+anything that genuinely means "shift by N seconds".
+
+## 27.3 The $0.00 was the grace period, not the scaling
+
+Accrued cost is watts × **elapsed**, and with `DEMO_GRACE_S=1` a finding is reported
+about a second after it becomes true. $0.0007 rounds to $0.00 and reads as broken rather
+than as "this only just started". Prop scaling (§25) fixed the watts; it cannot fix
+elapsed time.
+
+The card now shows both: **cost so far** at 3 decimals, and **costing $X/hour** — a
+figure that does not depend on how long you have been standing there. Computed from the
+load's live watts and the current rate.
+
+With the clock pinned on-peak and scaling on:
+
+```
+Cooling an empty home              $3.06
+Lights left on in the empty room   $0.67
+```
+
+was $0.00 for both.
+
+## 27.4 GenieX had silently wedged
+
+Noticed only because narration came back `(template)` instead of `(llm)`:
+`[planner] falling back to deterministic plan (ReadTimeout ... port 18181)`.
+
+The process was alive — 9 GB working set, 7541 s CPU — and `/v1/models` timed out at 20 s.
+Restarting fixed it: **11.2 s cold, 0.2 s warm**.
+
+**The fallback is why this was nearly invisible.** Everything kept answering, just from
+templates. Before filming, check narration says `(llm)` and not `(template)`:
+
+```bash
+curl -s -o /dev/null -w "%{http_code} %{time_total}s
+" --max-time 20 http://localhost:18181/v1/models
+```
+

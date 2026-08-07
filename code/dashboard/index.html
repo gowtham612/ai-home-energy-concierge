@@ -543,6 +543,22 @@ function drawStateTable() {
   document.getElementById("tbody-state").innerHTML = rows.join("");
 }
 
+// Cost accrued so far is watts x ELAPSED, and with the demo grace period at one
+// second a finding is reported almost the instant it becomes true - so the
+// honest accrued figure is $0.0007 and renders as "$0.00", which reads as
+// broken rather than as "this only just started".
+//
+// The figure that does NOT depend on how long you have been standing there is
+// the rate: what this load costs per hour while it stays on. Show both, and
+// keep the accrued number's precision instead of rounding it into nothing.
+function rateFig(r) {
+  const l = (STATE.loads ?? {})[r.load_key];
+  const rate = STATE.tariff?.rate;
+  if (!l || l.state !== "on" || !rate || !l.watts) return "";
+  const perHour = (l.watts / 1000) * rate;
+  return `<span class="fig">costing <b>$${perHour.toFixed(2)}</b>/hour</span>`;
+}
+
 function drawRecos(recos) {
   const el = document.getElementById("recos");
   if (!recos.length) {
@@ -574,7 +590,8 @@ function drawRecos(recos) {
         <h3>${esc(r.title)}</h3>
         <p>${esc(r.body)}</p>
         <div class="figs">
-          <span class="fig">cost <b>$${(r.usd ?? 0).toFixed(2)}</b></span>
+          <span class="fig">cost so far <b>$${(r.usd ?? 0).toFixed(3)}</b></span>
+          ${rateFig(r)}
           <span class="fig">energy <b>${(r.kwh ?? 0).toFixed(2)}</b> kWh</span>
           <span class="fig">carbon <b>${(r.co2_kg ?? 0).toFixed(2)}</b> kg</span>
         </div>

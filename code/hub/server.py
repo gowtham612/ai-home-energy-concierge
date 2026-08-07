@@ -436,7 +436,28 @@ def on_message(client, userdata, msg):
         elif msg.topic == "home/context/user":
             STORE.update_user(payload)
         elif msg.topic == "home/context/clock":
-            STORE.sim_clock_offset = payload.get("offset_s", 0.0)
+            # pin_hhmm is resolved HERE, not by the sender. The board's clock is
+            # UTC and the hub's is local, so an offset computed on the board
+            # landed the demo seven hours out — asked for 18:30 it produced
+            # 11:30, which silently swapped the on-peak rate for super-off-peak
+            # and changed every dollar on screen. Whoever renders the clock has
+            # to own the conversion. offset_s is still accepted for anything
+            # that genuinely means "shift by N seconds".
+            pin = payload.get("pin_hhmm")
+            if pin:
+                try:
+                    hh, mm = (int(x) for x in str(pin).split(":", 1))
+                    now = time.time()
+                    lt = time.localtime(now)
+                    target = time.mktime((lt.tm_year, lt.tm_mon, lt.tm_mday,
+                                          hh, mm, 0, 0, 0, lt.tm_isdst))
+                    STORE.sim_clock_offset = target - now
+                    print(f"[clock] pinned to {pin} local "
+                          f"(offset {STORE.sim_clock_offset:+.0f}s)")
+                except Exception as exc:
+                    print(f"[clock] bad pin_hhmm {pin!r}: {exc}")
+            else:
+                STORE.sim_clock_offset = payload.get("offset_s", 0.0)
     except Exception as exc:
         print(f"[mqtt] bad payload on {msg.topic}: {exc}")
 
