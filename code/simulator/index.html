@@ -271,19 +271,7 @@
       </div>
     </div>
 
-    <!-- occupancy -->
-    <div class="ctl">
-      <div class="ctl-head"><label>Occupancy</label><span class="tag">SIM</span></div>
-      <div class="tog-row">
-        <div class="seg" role="group" aria-label="Occupancy">
-          <button id="occOn">Occupied</button>
-          <button id="occOff" class="on">Empty</button>
-        </div>
-        <span class="hold" id="occHold">empty 0:00 · R1 fires after 10:00</span>
-      </div>
-    </div>
-
-    <!-- presence -->
+    <!-- presence — the single "is anyone home" control; occupancy follows it -->
     <div class="ctl">
       <div class="ctl-head"><label>Presence</label><span class="tag">SIM · geofence stand-in</span></div>
       <div class="tog-row">
@@ -292,6 +280,7 @@
           <button id="presAway">Away</button>
         </div>
         <span class="hold" id="presHold"></span>
+          <span class="hold" id="occHold"></span>
       </div>
     </div>
 
@@ -648,6 +637,7 @@
     // Without this, the dedup below drops a cue whose state is otherwise
     // unchanged — the autopilot would post and nothing would move.
     p.push(s.demo_cue && s.demo_cue.id);
+    p.push((s.demo_cues || []).length);
     return p.join("|");
   }
 
@@ -658,13 +648,24 @@
   // through the same setter a human click uses, and says so in the wire log.
   var lastCueId = 0;
 
+  // Apply EVERY cue we have not seen, in order — not just the newest.
+  // Button C fires presence+occupancy+lux back to back and this page renders
+  // once; taking only the latest dropped two of the three, and the page then
+  // posted its stale local values back over the hub.
+  function applyDemoCues(s){
+    var list = (s && s.demo_cues) || [];
+    if(!list.length && s && s.demo_cue) list = [s.demo_cue];
+    list.slice().sort(function(a,b){ return (a.id||0) - (b.id||0); })
+        .forEach(function(cue){ applyDemoCue(cue); });
+  }
+
   function applyDemoCue(cue){
     if(!cue || !cue.id || cue.id <= lastCueId) return;
     lastCueId = cue.id;
     var v = cue.value, label = "";
     try{
       if(cue.control === "presence"){ setPres(String(v)); label = "presence -> " + v; flash($("presHome").parentNode); }
-      else if(cue.control === "occupancy"){ setOcc(!!v); label = "occupancy -> " + (v ? "occupied" : "empty"); flash($("occOn").parentNode); }
+      else if(cue.control === "occupancy"){ setOcc(!!v); label = "occupancy -> " + (v ? "occupied" : "empty"); }
       else if(cue.control === "lux"){ setLux(+v); sendSensor(true); label = "lux -> " + v; flash($("lux")); }
       else if(cue.control === "humidity"){ setHum(+v); sendSensor(true); label = "humidity -> " + v; flash($("hum")); }
       else if(cue.control === "temp_c"){ label = "temp cue ignored — the Knob owns temp_c"; }
@@ -702,7 +703,7 @@
 
   function renderState(s){
     if(!s || typeof s !== "object") return;
-    applyDemoCue(s.demo_cue);
+    applyDemoCues(s);
     mirrorKnobTemp(s);
 
     var sig = stateSig(s);
@@ -816,15 +817,17 @@
   function setLux(v){ sim.lux=v; $("lux").value=v; $("luxVal").textContent=Math.round(v)+" lx"; }
   function setHum(v){ sim.humidity=v; $("hum").value=v; $("humVal").textContent=Math.round(v)+" %"; }
 
+  // Occupancy has no control of its own any more — presence is the single
+  // "is anyone home" input. The FIELD still exists because rules read it (R1
+  // keys on room occupancy, R2 on user presence), but a user can no longer set
+  // it independently. Two controls let the home be Away AND Occupied at the
+  // same time, which a one-room home cannot be, and that combination silently
+  // disabled R1 - demo beat 2 did nothing and reported no error.
   function setOcc(on, silent){
     if(sim.occupancy !== on){ occChangedAt = Date.now(); }
     sim.occupancy = on;
-    $("occOn").classList.toggle("on", on);
-    $("occOff").classList.toggle("on", !on);
     if(!silent) sendSensor(true);
   }
-  $("occOn").addEventListener("click", function(){ setOcc(true); });
-  $("occOff").addEventListener("click", function(){ setOcc(false); });
 
   function setPres(p, silent){
     if(presence.presence !== p){ presChangedAt = Date.now(); }
@@ -832,7 +835,11 @@
     presence.distance_m = p==="away" ? 2400 : 10;
     $("presHome").classList.toggle("on", p==="home");
     $("presAway").classList.toggle("on", p==="away");
-    if(!silent) sendPresence();
+    // Occupancy follows presence. Two separate controls meant "Away" could sit
+    // next to "Occupied", which is not a state a one-room home can be in - and
+    // it silently disabled R1, because R1 bails the moment occupancy is true.
+    setOcc(p === "home", true);
+    if(!silent){ sendPresence(); sendSensor(true); }
   }
   $("presHome").addEventListener("click", function(){ setPres("home"); });
   $("presAway").addEventListener("click", function(){ setPres("away"); });
@@ -840,7 +847,8 @@
   // hold timers (client-side guidance only — the hub keeps the real clocks)
   setInterval(function(){
     function mmss(ms){ var s=Math.floor(ms/1000); return Math.floor(s/60)+":"+String(s%60).padStart(2,"0"); }
-    $("occHold").textContent = sim.occupancy
+    var oh = $("occHold");
+    if(oh) oh.textContent = sim.occupancy
       ? "occupied"
       : "empty "+mmss(Date.now()-occChangedAt)+" · R1 fires after 10:00";
     $("presHold").textContent = presence.presence==="away"

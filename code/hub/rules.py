@@ -22,8 +22,17 @@ from energy_model import WasteEstimate, waste_estimate
 # Thresholds — every one named, no magic numbers inline
 # --------------------------------------------------------------------------
 
-UNOCCUPIED_GRACE_S = 600          # 10 min unoccupied before lights count as wasted
-AWAY_HVAC_GRACE_S = 300           # 5 min away before HVAC counts as wasted
+# 10 min unoccupied before lights count as wasted. Env-overridable ONLY so a
+# live demo can press a button and see the result: at 600 s the operator stands
+# there for ten minutes and the beat lands on nobody. Set DEMO_GRACE_S=20 for a
+# rehearsal or a take; leave it alone in anything resembling deployment, where
+# ten minutes is the honest threshold for "nobody is coming back".
+#
+# It is a THRESHOLD, not a fudge: shortening it makes the system quicker to call
+# something waste, which is a real behaviour change and should be said out loud
+# if the shortened value is on screen.
+UNOCCUPIED_GRACE_S = float(os.environ.get("DEMO_GRACE_S", "600"))
+AWAY_HVAC_GRACE_S = float(os.environ.get("DEMO_AWAY_GRACE_S", "300"))
 DAYLIGHT_LUX_THRESHOLD = 300      # above this, artificial light is redundant
 PHANTOM_AWAY_S = 7200             # 2 h away before standby draw is worth flagging
 PEAK_DEFERRABLE_MIN_WATTS = 1000  # only flag genuinely heavy deferrable loads

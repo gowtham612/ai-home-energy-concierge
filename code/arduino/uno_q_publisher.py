@@ -779,8 +779,13 @@ class ButtonWatch:
         ok = False
         try:
             if action == "presence_away":
+                # BOTH fields. R1 reads room occupancy, R2 reads user presence.
+                # Setting only presence left occupancy true, so R1 bailed on its
+                # first line and the lights never went off - demo beat 2 did
+                # nothing at all, with no error anywhere to explain why.
                 ok = self._cue("presence", "away", "button A: everyone out")
-                print(f"[button] {label} -> presence AWAY", flush=True)
+                ok &= self._cue("occupancy", False, "button A: room now empty")
+                print(f"[button] {label} -> presence AWAY + room empty", flush=True)
 
             elif action == "ambient_light":
                 self.lux_high = not self.lux_high

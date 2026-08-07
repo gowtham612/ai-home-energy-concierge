@@ -76,7 +76,13 @@ class StateStore:
         # simulator page applies it to its OWN widget, so a scripted run drives the
         # visible UI rather than quietly POSTing behind it. Monotonic id: the page
         # acts only on a cue it has not seen, so a re-render never replays one.
-        self.demo_cue: Dict = {}
+        self.demo_cue: Dict = {}          # most recent, kept for the /ask page
+        # A QUEUE, not a slot. Button C fires presence+occupancy+lux back to
+        # back; with one slot the page renders once, sees only the newest id and
+        # silently drops the rest — then posts its own stale values over them.
+        # Bounded because a page that has been closed for an hour should not
+        # replay an hour of scenario when it reopens.
+        self.demo_cues: deque = deque(maxlen=20)
         self._demo_cue_seq = 0
         self.lock = threading.Lock()
 
@@ -241,6 +247,7 @@ class StateStore:
             "recos": [r.to_dict() for r in self.latest_recos(12)],
             "plan": self.plan,
             "demo_cue": self.demo_cue,
+            "demo_cues": list(self.demo_cues),
             "applied_ids": sorted(self.applied_ids),
             "realized": self.realized_totals(),
             "actuations": self.actuations[-8:][::-1],
@@ -253,8 +260,13 @@ def _rate(dt: datetime):
 
 
 STORE = StateStore()
-# Findings already auto-acted on, so the loop does not re-fire every 5 s.
-AUTO_ACTED: set = set()
+# load_key -> when we last auto-acted on it. A COOLDOWN, not a permanent set.
+# It was a set, which meant the hub would auto-switch a given load exactly once
+# in its whole lifetime: after the first demo run, pressing the reset button and
+# going away again did nothing at all, with the finding sitting right there on
+# the dashboard. A demo has to be repeatable without restarting the server.
+AUTO_ACTED: Dict[str, float] = {}
+AUTO_COOLDOWN_S = float(os.environ.get("AUTO_COOLDOWN_S", "30"))
 LLM = LLMClient()
 app = FastAPI(title="AI Home Energy Concierge")
 CLIENTS: List[WebSocket] = []
@@ -308,6 +320,7 @@ def on_message(client, userdata, msg):
                                       "value": value,
                                       "note": str(payload.get("note", ""))[:120],
                                       "ts": time.time()}
+                    STORE.demo_cues.append(STORE.demo_cue)
                 # A cue from the BOARD is applied here as well as broadcast.
                 # Cues are normally applied BY the simulator page, which is what
                 # makes its switches move — but that means a physical button
@@ -410,7 +423,12 @@ def evaluation_tick() -> List[Recommendation]:
             # (daylight) both target living/lights, so keying on the finding
             # sent two switch-off commands for one bulb — harmless but noisy,
             # and it would read as a stutter on camera.
-            if f.load_key in AUTO_ACTED or f.id in STORE.applied_ids:
+            if f.id in STORE.applied_ids:
+                continue
+            # Short cooldown only, to stop a re-fire in the seconds between
+            # publishing the command and the load state coming back "off".
+            # The state check below is what really prevents repeats.
+            if time.time() - AUTO_ACTED.get(f.load_key, 0) < AUTO_COOLDOWN_S:
                 continue
             # Nothing to do if it is already off. This is also what stops the
             # loop re-firing every 5 s once the bulb has actually gone out.
@@ -420,7 +438,7 @@ def evaluation_tick() -> List[Recommendation]:
             if not allowed:
                 print(f"[auto] refused {f.load_key}: {reason}")
                 continue
-            AUTO_ACTED.add(f.load_key)
+            AUTO_ACTED[f.load_key] = time.time()
             cmd = {"action": "off", "reco_id": f.id, "approved_by": "auto",
                    "ts": time.time()}
             if MQTT_CLIENT is not None:
@@ -566,6 +584,7 @@ async def api_demo_cue(request: Request):
                           "value": body.get("value"),
                           "note": str(body.get("note", ""))[:120],
                           "ts": time.time()}
+        STORE.demo_cues.append(STORE.demo_cue)
     await broadcast({"type": "state", "data": STORE.public_state()})
     return JSONResponse({"ok": True, "cue": STORE.demo_cue})
 
