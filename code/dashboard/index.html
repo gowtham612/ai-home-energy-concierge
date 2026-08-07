@@ -377,6 +377,7 @@ function render() {
     document.getElementById("kpi-occ-sub").textContent =
       `${roomName} · ${(room.temp_c ?? 0).toFixed(1)}°C · ${room.lux ?? 0} lux · user ${s.user?.presence ?? "?"}`;
   }
+  paintPresence(s.user?.presence);
   document.getElementById("kpi-findings").textContent = open.length;
   document.getElementById("kpi-findings-sub").textContent =
     open.length ? `top: ${open[0].rule_name.replace(/_/g, " ")}` : "nothing wasteful detected";
@@ -629,13 +630,25 @@ function esc(s) {
 }
 
 /* ---------------- controls ---------------- */
+/* Paint Home/Away from the HUB's state, never from the click.
+   The buttons used to be toggled only inside setPresence(), so they tracked
+   "what this page last asked for" rather than "what the home is". Anything
+   that changed presence elsewhere -- the simulator page, Modulino button A,
+   an MQTT cue -- moved the KPI text but left these buttons stuck, so the
+   dashboard disagreed with the simulator on camera. */
+function paintPresence(p) {
+  document.getElementById("btn-home").classList.toggle("active", p === "home");
+  document.getElementById("btn-away").classList.toggle("active", p === "away");
+}
+
 async function setPresence(p) {
+  paintPresence(p);          // optimistic, so the click feels instant
   await fetch("/api/presence", {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ presence: p })
   });
-  document.getElementById("btn-home").classList.toggle("active", p === "home");
-  document.getElementById("btn-away").classList.toggle("active", p === "away");
+  /* render() repaints from state on the next push, which also corrects this
+     if the hub rejected or overrode the request. */
 }
 document.getElementById("btn-home").onclick = () => setPresence("home");
 document.getElementById("btn-away").onclick = () => setPresence("away");
