@@ -187,10 +187,14 @@ bool lightsOn = false, acOn = false;
  * immune to a dropped line (the count still climbs) and to a repeated one (no
  * change, no action) — neither of which an edge flag would survive. They wrap
  * at 65535 harmlessly: the consumer compares for inequality, not magnitude. */
-uint16_t btnLights = 0, btnAc = 0;
+/* One counter per button. Named b1/b2/b3 for the BUTTON, not for a load: they
+   used to be btnLights/btnAc because A and B toggled the bulb and the plug
+   directly. They now drive SIMULATOR state instead (presence, ambient light,
+   reset), so a load-shaped name would be actively misleading. */
+uint16_t btn1 = 0, btn2 = 0, btn3 = 0;
 
 /* millis() of a press still awaiting its CMD confirmation; 0 = nothing pending. */
-unsigned long pendLights = 0, pendAc = 0;
+unsigned long pend1 = 0, pend2 = 0, pend3 = 0;
 bool lastActionFailed = false;
 
 #if NET_STATUS_LED
@@ -445,14 +449,20 @@ void pollButtons(unsigned long now) {
       stable[i] = now3[i];
       if (stable[i]) {                       // confirmed rising edge
 #if BUTTON_ACTUATION
+        /* A = presence AWAY · B = ambient light across the threshold ·
+           C = reset to the demo's steady state. None of these switch a device
+           from here; the publisher turns the counter into a simulator cue, so
+           the on-screen control moves rather than the hub changing behind it. */
         if (i == 0) {
-          btnLights++; pendLights = now ? now : 1;
-          lastActionFailed = false; chirp(660);   // "press taken, awaiting device"
+          btn1++; pend1 = now ? now : 1;
+          lastActionFailed = false; chirp(660);
         } else if (i == 1) {
-          btnAc++;     pendAc     = now ? now : 1;
+          btn2++; pend2 = now ? now : 1;
           lastActionFailed = false; chirp(660);
         } else {
-          discoverNodes(); chirp(880);
+          btn3++; pend3 = now ? now : 1;
+          lastActionFailed = false; chirp(880);
+          discoverNodes();          /* C also re-scans, as it always did */
         }
 #else
         if (i == 0)      { occForce = !occForce; chirp(occForce ? 880 : 440); }
@@ -595,14 +605,40 @@ void handleCommand(char *line) {
     if (which == NULL) return;
     unsigned long now = millis();
     if (which[0] == 'a' || which[0] == 'A') {
-      btnLights++; pendLights = now ? now : 1;
+      btn1++; pend1 = now ? now : 1;
       lastActionFailed = false; chirp(660);
-      Serial.println(F("{\"ack\":\"simbtn\",\"button\":\"a\",\"load\":\"lights\"}"));
+      Serial.println(F("{\"ack\":\"simbtn\",\"button\":\"a\",\"does\":\"presence_away\"}"));
     } else if (which[0] == 'b' || which[0] == 'B') {
-      btnAc++;     pendAc     = now ? now : 1;
+      btn2++; pend2 = now ? now : 1;
       lastActionFailed = false; chirp(660);
-      Serial.println(F("{\"ack\":\"simbtn\",\"button\":\"b\",\"load\":\"ac\"}"));
+      Serial.println(F("{\"ack\":\"simbtn\",\"button\":\"b\",\"does\":\"ambient_light\"}"));
+    } else if (which[0] == 'c' || which[0] == 'C') {
+      btn3++; pend3 = now ? now : 1;
+      lastActionFailed = false; chirp(880);
+      Serial.println(F("{\"ack\":\"simbtn\",\"button\":\"c\",\"does\":\"reset_steady_state\"}"));
     }
+    return;
+  }
+#endif
+
+#if BUTTON_ACTUATION
+  /* `BTNACK <1|2|3> <ok|fail>` — the publisher confirming it carried out the
+     action a press asked for. Buttons no longer switch a load, so a CMD about a
+     bulb cannot serve as their acknowledgement; without this every press would
+     sit pending and buzz at ACK_TIMEOUT_MS even when it worked. */
+  if (strcmp(verb, "BTNACK") == 0) {
+    char *which = strtok(NULL, " 	");
+    char *okTok = strtok(NULL, " 	");
+    if (which == NULL) return;
+    bool failed = (okTok != NULL && strcmp(okTok, "fail") == 0);
+    switch (which[0]) {
+      case '1': pend1 = 0; break;
+      case '2': pend2 = 0; break;
+      case '3': pend3 = 0; break;
+      default: return;
+    }
+    lastActionFailed = failed;
+    chirp(failed ? 196 : 440);
     return;
   }
 #endif
@@ -677,12 +713,12 @@ void handleCommand(char *line) {
   if (strcmp(load, "lights") == 0) {
     if (!failed) lightsOn = turnOn;
 #if BUTTON_ACTUATION
-    pendLights = 0;
+    pend1 = 0;
 #endif
   } else if (strcmp(load, "ac") == 0) {
     if (!failed) acOn = turnOn;
 #if BUTTON_ACTUATION
-    pendAc = 0;
+    pend2 = 0;
 #endif
   } else {
     known = false;
@@ -756,12 +792,9 @@ void loop() {
   /* A press the Linux side never answered for. Either the publisher is not
      running, or host->MCU serial does not reach us (Risk V-2). Say so with the
      error LED rather than leaving the operator watching a dead button. */
-  if (pendLights && (now - pendLights) > ACK_TIMEOUT_MS) {
-    pendLights = 0; lastActionFailed = true; chirp(196);
-  }
-  if (pendAc && (now - pendAc) > ACK_TIMEOUT_MS) {
-    pendAc = 0; lastActionFailed = true; chirp(196);
-  }
+  if (pend1 && (now - pend1) > ACK_TIMEOUT_MS) { pend1 = 0; lastActionFailed = true; chirp(196); }
+  if (pend2 && (now - pend2) > ACK_TIMEOUT_MS) { pend2 = 0; lastActionFailed = true; chirp(196); }
+  if (pend3 && (now - pend3) > ACK_TIMEOUT_MS) { pend3 = 0; lastActionFailed = true; chirp(196); }
 #endif
 
   if (now - lastSample < SAMPLE_MS) return;   // non-blocking; no delay() anywhere
@@ -806,8 +839,9 @@ void loop() {
 #if BUTTON_ACTUATION
   /* Press counters, not events: the publisher acts on the delta since the last
      line it saw, so a dropped line loses nothing and a duplicate does nothing. */
-  Serial.print(F(",\"bl\":"));           Serial.print(btnLights);
-  Serial.print(F(",\"ba\":"));           Serial.print(btnAc);
+  Serial.print(F(",\"b1\":"));           Serial.print(btn1);
+  Serial.print(F(",\"b2\":"));           Serial.print(btn2);
+  Serial.print(F(",\"b3\":"));           Serial.print(btn3);
 #endif
 #if NET_STATUS_LED
   /* Echo back what the readiness LEDs are currently showing. The LEDs are the

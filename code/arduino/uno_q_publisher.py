@@ -719,26 +719,41 @@ class KasaBank:
 
 
 class ButtonWatch:
-    """Modulino button presses -> real Kasa switching -> LED confirmation.
+    """Modulino button presses -> SIMULATOR state, via the hub's cue channel.
 
-    A hardware debug path that does not involve the browser at all: press
-    button A or B on the Buttons node and the corresponding device should
-    physically switch. It answers "is the Kasa path working through the UNO Q?"
-    with the hub, the rules engine and the UI all out of the way.
+    The buttons used to switch the bulb and the plug directly. They now drive
+    the demo's scenario instead:
 
-    The MCU sends monotonic COUNTERS (`bl`, `ba`), not edges, so this survives a
-    dropped telemetry line — the count still climbs and the delta is still seen.
+        A  presence -> away          (the simulator's own toggle moves)
+        B  ambient light            (crosses the daylight threshold, slider moves)
+        C  reset to steady state    (home, lights + HVAC on, temp and lux normal)
+
+    Deliberately a CUE, not a direct write. Posting to the hub behind the
+    simulator's back would change the numbers while the on-screen switches sat
+    still, which reads as a broken UI. The cue makes the page move its own
+    control, so a press looks the same as a tap.
+
+    Cues travel over MQTT (`home/demo/cue`) rather than HTTP, because the
+    publisher already has a broker connection that works over the USB tunnel;
+    reaching the hub's HTTP port would need a second tunnel for no benefit.
+
+    Counters, not edges: a dropped telemetry line loses nothing because the
+    count still climbs and the delta is still seen on the next line.
     """
 
-    KEYS = {"bl": "lights", "ba": "ac"}
+    # Counter key -> (button label, what it does)
+    KEYS = {"b1": ("A", "presence_away"),
+            "b2": ("B", "ambient_light"),
+            "b3": ("C", "reset_steady_state")}
 
     def __init__(self, bank: "KasaBank", pub: "Publisher"):
         self.bank = bank
         self.pub = pub
         self.seen: Dict[str, int] = {}
+        self.lux_high = False        # B toggles between the two sides
 
     def observe(self, raw: Dict) -> None:
-        for key, load in self.KEYS.items():
+        for key, (label, action) in self.KEYS.items():
             if key not in raw:
                 continue
             try:
@@ -749,59 +764,75 @@ class ButtonWatch:
             prev = self.seen.get(key)
             self.seen[key] = count
 
-            # First sight: BASELINE ONLY. Acting here would replay every press
-            # since the MCU booted, each time this process restarts.
-            if prev is None:
+            # First sight BASELINES only, or every press since MCU boot would
+            # replay each time this process restarts.
+            if prev is None or count == prev:
                 continue
-            if count == prev:
-                continue
-            # A counter that went BACKWARDS means the MCU rebooted and reset it.
-            # (A genuine wrap needs 65535 presses; a re-flash needs none.)
             if count < prev:
-                print(f"[button] {load}: counter reset {prev} -> {count} "
-                      f"(MCU restarted) — re-baselined, not switching", flush=True)
+                print(f"[button] {label}: counter reset {prev} -> {count} "
+                      f"(MCU restarted) — re-baselined", flush=True)
                 continue
 
-            self._act(load, count - prev)
+            self._act(label, action, key)
 
-    def _act(self, load: str, presses: int) -> None:
-        # Two presses land back where they started; only the parity matters.
-        if presses > 1:
-            print(f"[button] {load}: {presses} presses coalesced", flush=True)
-            if presses % 2 == 0:
-                state = "on" if self._is_on(load) else "off"
-                mcu_send(f"CMD {load} {state} ok\n")
-                return
+    def _act(self, label: str, action: str, key: str) -> None:
+        ok = False
+        try:
+            if action == "presence_away":
+                ok = self._cue("presence", "away", "button A: everyone out")
+                print(f"[button] {label} -> presence AWAY", flush=True)
 
-        ok, want, source = self.bank.toggle(load)
-        if want is None:
-            why = ("no Kasa device bound — nothing to switch" if source == "unbound"
-                   else "device is bound but did not answer — not switching blind")
-            print(f"[button] {load}: {why}", flush=True)
-            mcu_send(f"CMD {load} off fail\n")
-            return
+            elif action == "ambient_light":
+                self.lux_high = not self.lux_high
+                # Straddle rules.DAYLIGHT_LUX_THRESHOLD (300) with margin, so the
+                # rule flips decisively rather than sitting on the boundary.
+                value = 900 if self.lux_high else 60
+                ok = self._cue("lux", value,
+                               f"button B: ambient light {'bright' if self.lux_high else 'dim'}")
+                print(f"[button] {label} -> lux {value}", flush=True)
 
-        print(f"[button] {load} -> {want}  ok={ok} source={source}", flush=True)
+            elif action == "reset_steady_state":
+                ok = self._reset_steady_state()
+                print(f"[button] {label} -> reset to steady state", flush=True)
+        except Exception as exc:
+            print(f"[button] {label} failed: {type(exc).__name__}: {exc}", flush=True)
+            ok = False
 
-        # Tell the MCU what the DEVICE reported, so the LED cannot claim a switch
-        # that did not happen. This write is also the live test of the host->MCU
-        # serial direction (Risk V-2).
-        if not mcu_send(f"CMD {load} {want} {'ok' if ok else 'fail'}\n"):
-            print("[button] could not write back to the MCU — LED will time out",
-                  flush=True)
+        # Tell the MCU, or the press sits pending and buzzes at ACK_TIMEOUT_MS
+        # even though it worked. CMD is about loads and cannot serve here.
+        mcu_send(f"BTNACK {key[-1]} {'ok' if ok else 'fail'}\n")
 
-        # Push the new state immediately rather than waiting for the next
-        # KASA_POLL_S sweep, so the dashboard tracks the button in real time.
-        if ok:
-            info = self.bank.poll().get(load) or {}
-            watts = info.get("watts")
-            self.pub.load(load, want,
-                          round(float(watts), 1) if watts is not None else 0.0,
-                          metered=bool(info.get("metered")))
-        self.pub.actuator(load, want, "manual-button", bool(ok), source)
+    def _cue(self, control: str, value, note: str) -> bool:
+        """Ask the simulator page to move one of its own controls."""
+        try:
+            self.pub.c.publish("home/demo/cue",
+                               json.dumps({"control": control, "value": value,
+                                           "note": note}))
+            return True
+        except Exception as exc:
+            print(f"[button] cue failed: {exc}", flush=True)
+            return False
 
-    def _is_on(self, load: str) -> bool:
-        return (self.bank.poll().get(load) or {}).get("state") == "on"
+    def _reset_steady_state(self) -> bool:
+        """Button C: put the demo back where it starts, for a clean retake.
+
+        Home, occupied, dim, comfortable, and both real devices ON — that is
+        beat 1's opening frame. Without this every rehearsal needs someone to
+        set the scene by hand, which is how takes drift.
+        """
+        ok = True
+        ok &= self._cue("presence", "home", "button C: reset")
+        ok &= self._cue("occupancy", True, "button C: reset")
+        ok &= self._cue("lux", 60, "button C: reset")
+        self.lux_high = False
+        # Real devices back on. The knob owns temperature, so a human still has
+        # to turn it back if it was driven hot — say so rather than pretend.
+        for load in ("lights", "ac"):
+            if load in self.bank.devices:
+                res_ok, source, _w = self.bank.switch(load, "on")
+                print(f"[button] C: {load} -> on ok={res_ok} source={source}", flush=True)
+                ok &= bool(res_ok)
+        return ok
 
 
 class Actuator:
